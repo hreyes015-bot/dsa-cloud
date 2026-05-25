@@ -2636,11 +2636,14 @@ window.generarAsientoVentas = async () => {
 
   // Totales del período
   const aplicaITBIS = document.getElementById('rv-aplica-itbis')?.checked ?? true;
-  const totBruto = registroVentasData.reduce((s,r)=>s+r.bruto, 0);
-  const totItbis = aplicaITBIS ? registroVentasData.reduce((s,r)=>s+r.itbis, 0) : 0;
+  const totBruto = registroVentasData.reduce((s,r)=>s+(r.bruto||0), 0);
+  const totItbis = aplicaITBIS ? registroVentasData.reduce((s,r)=>s+(r.itbis||0), 0) : 0;
+  const totDesc  = registroVentasData.reduce((s,r)=>s+(r.descuentos||0), 0);
   const totNeto  = aplicaITBIS
-    ? registroVentasData.reduce((s,r)=>s+r.neto, 0)
-    : totBruto; // sin ITBIS, neto = bruto
+    ? registroVentasData.reduce((s,r)=>s+(r.neto||0), 0)
+    : totBruto;
+  // CxC = lo que el cliente realmente paga (Neto + ITBIS)
+  const cxcMonto = totNeto + totItbis;
 
   // Verificar que no exista ya un asiento con ese concepto
   const { data: existente } = await supa.from('asientos').select('id,numero')
@@ -2654,11 +2657,17 @@ window.generarAsientoVentas = async () => {
     .eq('empresa_id', currentEmpresa.id).order('numero', { ascending:false }).limit(1);
   const siguiente = ((ultimos?.[0]?.numero) || 0) + 1;
 
-  // Construir líneas del asiento (mismo formato que guardarAsientoCloud)
-  const lineas = [
-    { cuenta: '101111', debe: totBruto, haber: 0 },
-    { cuenta: '40012',  debe: 0, haber: totNeto }
-  ];
+  // Construir líneas del asiento
+  const lineas = [];
+  // DR: CxC Clientes — lo que el cliente paga (neto + ITBIS)
+  lineas.push({ cuenta: '101111', debe: cxcMonto, haber: 0 });
+  // DR: Descuentos en Venta — solo si el período tiene descuentos
+  if (totDesc > 0) {
+    lineas.push({ cuenta: '40013', debe: totDesc, haber: 0 });
+  }
+  // CR: Ingresos por Ventas — venta bruta antes de descuentos
+  lineas.push({ cuenta: '40012', debe: 0, haber: totBruto });
+  // CR: ITBIS Cobrado — solo si aplica
   if (aplicaITBIS && totItbis > 0) {
     lineas.push({ cuenta: '202511', debe: 0, haber: totItbis });
   }
@@ -2678,11 +2687,10 @@ window.generarAsientoVentas = async () => {
   if (error) { alert('Error al crear el asiento: ' + error.message); return; }
   await logAudit('asientos', 'crear', null, { concepto, total: totBruto });
 
-  const detalleItbis = aplicaITBIS && totItbis > 0
-    ? `\nCR: ITBIS Cobrado 18%    RD$ ${fmtNum(totItbis)}`
-    : '\n(Sin ITBIS — empresa exenta)';
+  const lineaDesc  = totDesc > 0 ? `\nDR: Descuentos en Venta   RD$ ${fmtNum(totDesc)}` : '';
+  const lineaItbis = aplicaITBIS && totItbis > 0 ? `\nCR: ITBIS Cobrado 18%     RD$ ${fmtNum(totItbis)}` : '\n    (Sin ITBIS — empresa exenta)';
 
-  alert(`✅ Asiento contable creado correctamente.\n\nN° ${siguiente} — ${concepto}\n\nDR: CxC Clientes          RD$ ${fmtNum(totBruto)}\nCR: Ingresos por Ventas   RD$ ${fmtNum(totNeto)}${detalleItbis}`);
+  alert(`✅ Asiento contable creado correctamente.\n\nN° ${siguiente} — ${concepto}\n\nDR: CxC Clientes          RD$ ${fmtNum(cxcMonto)}${lineaDesc}\nCR: Ingresos por Ventas   RD$ ${fmtNum(totBruto)}${lineaItbis}`);
 };
 
 // ── Exportar Excel ──
@@ -5424,30 +5432,4 @@ async function init() {
       session = data.session;
       showEmpresaScreen();
     } else {
-      showAuthScreen();
-    }
-
-    supa.auth.onAuthStateChange((event, sess) => {
-      if (event === 'SIGNED_OUT') {
-        session = null;
-        currentEmpresa = null;
-        showAuthScreen();
-      } else if (event === 'SIGNED_IN' && sess) {
-        session = sess;
-      }
-    });
-  } catch (err) {
-    console.error('Error de inicialización:', err);
-    showAuthScreen();
-    showMessage('Error al iniciar: ' + err.message, 'error');
-  }
-}
-
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', init);
-} else {
-  init();
-}
-</script>
-</body>
-</html>
+      showAuthScreen()
