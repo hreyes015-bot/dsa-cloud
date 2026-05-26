@@ -365,6 +365,7 @@
     <a class="nav-item" data-page="productos">📦 Productos</a>
     <a class="nav-item" data-page="facturas">🧾 Facturación</a>
     <a class="nav-item" data-page="compras">📥 Compras (606)</a>
+    <a class="nav-item" data-page="nomina">👷 Nómina</a>
     <a class="nav-item" data-page="captura">📸 Captura con IA</a>
     <div class="nav-section">DGII</div>
     <a class="nav-item" data-page="formato606">📋 Formato 606</a>
@@ -4593,6 +4594,630 @@ window.renderFlujoEfectivoCloud = () => {
   `;
 };
 
+// ==================== NÓMINA ====================
+// Tasas TSS República Dominicana 2025
+const TSS_AFP_EMP = 0.0287;   // AFP empleado
+const TSS_SFS_EMP = 0.0304;   // SFS empleado
+const TSS_AFP_PAT = 0.0710;   // AFP patronal
+const TSS_SFS_PAT = 0.0709;   // SFS patronal
+const TSS_SRL_PAT = 0.0110;   // SRL patronal (riesgos laborales)
+
+// ISR quincenal según tabla DGII 2025
+function calcISRQuincenal(salarioMensual) {
+  const anual = salarioMensual * 12;
+  let isr_anual = 0;
+  if      (anual <= 416220)  isr_anual = 0;
+  else if (anual <= 624329)  isr_anual = (anual - 416220) * 0.15;
+  else if (anual <= 867123)  isr_anual = (624329 - 416220) * 0.15 + (anual - 624329) * 0.20;
+  else                       isr_anual = (624329 - 416220) * 0.15 + (867123 - 624329) * 0.20 + (anual - 867123) * 0.25;
+  return isr_anual / 24; // dividir entre 24 quincenas del año
+}
+
+// Cálculo completo de nómina por empleado
+function calcNominaEmpleado(salarioMensual, horasExtras, diasFiestas, otrosIngresos, prestamos, otrosDescuentos) {
+  const salQ      = salarioMensual / 2;
+  const tarifaH   = salarioMensual / 240;           // 30 días × 8 horas
+  const montoHE   = horasExtras  * tarifaH * 1.35;  // 35% extra por hora extra
+  const montoDias = diasFiestas  * (salarioMensual / 30) * 2; // día festivo trabajado = 100% extra
+  const devengado = salQ + montoHE + montoDias + otrosIngresos;
+
+  const afpEmp = devengado * TSS_AFP_EMP;
+  const sfsEmp = devengado * TSS_SFS_EMP;
+  const isr    = calcISRQuincenal(salarioMensual);
+  const totalDed = afpEmp + sfsEmp + isr + prestamos + otrosDescuentos;
+  const neto   = devengado - totalDed;
+
+  const afpPat = devengado * TSS_AFP_PAT;
+  const sfsPat = devengado * TSS_SFS_PAT;
+  const srlPat = devengado * TSS_SRL_PAT;
+
+  return {
+    salario_quincena: salQ, monto_horas_extras: montoHE, monto_dias_fiestas: montoDias,
+    otros_ingresos: otrosIngresos, total_devengado: devengado,
+    afp_empleado: afpEmp, sfs_empleado: sfsEmp, isr, prestamos, otros_descuentos: otrosDescuentos,
+    total_deducciones: totalDed, neto_pagar: neto,
+    afp_patronal: afpPat, sfs_patronal: sfsPat, srl_patronal: srlPat,
+    total_tss_patronal: afpPat + sfsPat + srlPat
+  };
+}
+
+let empleadosData = [];
+let nominasData   = [];
+let nominaTabActiva = 'empleados';
+
+pages.nomina = () => {
+  const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  const anioActual = new Date().getFullYear();
+  const mesActual  = new Date().getMonth() + 1;
+  return `
+  <div class="page-header">
+    <div><h2>👷 Nómina</h2><p>${esc(currentEmpresa.nombre)}</p></div>
+  </div>
+
+  <!-- Tabs -->
+  <div style="display:flex;gap:4px;margin-bottom:20px;border-bottom:2px solid var(--border);padding-bottom:0;">
+    <button id="tab-empleados" onclick="switchNominaTab('empleados')"
+      style="padding:8px 20px;border:none;border-bottom:3px solid var(--primary);background:none;font-weight:700;color:var(--primary);cursor:pointer;font-size:14px;">
+      👥 Empleados</button>
+    <button id="tab-procesar" onclick="switchNominaTab('procesar')"
+      style="padding:8px 20px;border:none;border-bottom:3px solid transparent;background:none;font-weight:600;color:var(--muted);cursor:pointer;font-size:14px;">
+      ⚙️ Procesar Nómina</button>
+    <button id="tab-historial" onclick="switchNominaTab('historial')"
+      style="padding:8px 20px;border:none;border-bottom:3px solid transparent;background:none;font-weight:600;color:var(--muted);cursor:pointer;font-size:14px;">
+      📋 Historial</button>
+  </div>
+
+  <!-- TAB: EMPLEADOS -->
+  <div id="tab-content-empleados">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+      <div style="font-size:13px;color:var(--muted);" id="emp-count">Cargando empleados...</div>
+      <button class="btn btn-primary" onclick="abrirFormEmpleado()">+ Nuevo Empleado</button>
+    </div>
+    <div id="empleados-tabla"><div class="loading"><div class="loading-spinner"></div>Cargando...</div></div>
+  </div>
+
+  <!-- TAB: PROCESAR NÓMINA -->
+  <div id="tab-content-procesar" style="display:none;">
+    <div class="card" style="margin-bottom:16px;">
+      <h3 style="margin-bottom:14px;">⚙️ Configurar Período</h3>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end;">
+        <div>
+          <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Mes</label>
+          <select id="nom-mes" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;">
+            ${meses.map((m,i)=>`<option value="${i+1}" ${i+1===mesActual?'selected':''}>${m}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Año</label>
+          <select id="nom-anio" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;">
+            ${[anioActual-1,anioActual,anioActual+1].map(a=>`<option value="${a}" ${a===anioActual?'selected':''}>${a}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Quincena</label>
+          <select id="nom-quincena" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;">
+            <option value="1">1ra Quincena (día 1-15)</option>
+            <option value="2">2da Quincena (día 16-fin)</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Fecha de Pago</label>
+          <input type="date" id="nom-fecha-pago" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;" value="${new Date().toISOString().split('T')[0]}">
+        </div>
+        <button class="btn btn-primary" onclick="generarTablaNomina()">⚙️ Generar Tabla</button>
+      </div>
+    </div>
+    <div id="nomina-tabla-proceso"></div>
+  </div>
+
+  <!-- TAB: HISTORIAL -->
+  <div id="tab-content-historial" style="display:none;">
+    <div id="historial-nominas"><div class="loading"><div class="loading-spinner"></div>Cargando...</div></div>
+  </div>
+`;};
+
+window.switchNominaTab = (tab) => {
+  nominaTabActiva = tab;
+  ['empleados','procesar','historial'].forEach(t => {
+    document.getElementById(`tab-content-${t}`).style.display = t === tab ? 'block' : 'none';
+    const btn = document.getElementById(`tab-${t}`);
+    if (btn) {
+      btn.style.borderBottom = t === tab ? '3px solid var(--primary)' : '3px solid transparent';
+      btn.style.color = t === tab ? 'var(--primary)' : 'var(--muted)';
+      btn.style.fontWeight = t === tab ? '700' : '600';
+    }
+  });
+  if (tab === 'empleados')  renderEmpleados();
+  if (tab === 'historial')  renderHistorialNominas();
+};
+
+window.after_nomina = async () => {
+  await renderEmpleados();
+};
+
+// ─── EMPLEADOS ───
+window.renderEmpleados = async () => {
+  const tabla = document.getElementById('empleados-tabla');
+  if (!tabla) return;
+  tabla.innerHTML = '<div class="loading"><div class="loading-spinner"></div>Cargando...</div>';
+
+  const { data, error } = await supa.from('empleados')
+    .select('*').eq('empresa_id', currentEmpresa.id).order('nombre');
+  if (error) { tabla.innerHTML = `<div class="empty-state">Error: ${esc(error.message)}</div>`; return; }
+  empleadosData = data || [];
+
+  const count = document.getElementById('emp-count');
+  if (count) count.textContent = `${empleadosData.filter(e=>e.estado==='ACTIVO').length} activos · ${empleadosData.filter(e=>e.estado!=='ACTIVO').length} inactivos`;
+
+  if (empleadosData.length === 0) {
+    tabla.innerHTML = '<div class="empty-state">Sin empleados registrados. Agrega el primero.</div>';
+    return;
+  }
+
+  tabla.innerHTML = `<div style="overflow-x:auto;"><table>
+    <thead><tr>
+      <th>Nombre</th><th>Cédula</th><th>Cargo</th><th>Departamento</th>
+      <th class="num">Salario Mensual</th><th>Banco / Cuenta</th><th>Estado</th><th>Acciones</th>
+    </tr></thead>
+    <tbody>
+      ${empleadosData.map(e=>`<tr style="${e.estado!=='ACTIVO'?'opacity:.5':''}">
+        <td><strong>${esc(e.nombre)}</strong>${e.fecha_ingreso?`<div style="font-size:11px;color:var(--muted);">Desde: ${fmtDate(e.fecha_ingreso)}</div>`:''}
+        </td>
+        <td style="font-family:monospace;">${esc(e.cedula||'—')}</td>
+        <td>${esc(e.cargo||'—')}</td>
+        <td>${esc(e.departamento||'—')}</td>
+        <td class="num"><strong>RD$ ${fmtNum(e.salario_mensual)}</strong></td>
+        <td style="font-size:12px;">${esc(e.banco||'—')}<br><span style="color:var(--muted);">${esc(e.cuenta_bancaria||'')}</span></td>
+        <td><span style="font-size:11px;padding:3px 10px;border-radius:20px;background:${e.estado==='ACTIVO'?'#dcfce7':'#fee2e2'};color:${e.estado==='ACTIVO'?'#166534':'#991b1b'};">${e.estado}</span></td>
+        <td>
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;" onclick="abrirFormEmpleado('${e.id}')">✏️ Editar</button>
+          <button class="btn" style="padding:4px 10px;font-size:12px;background:${e.estado==='ACTIVO'?'#fee2e2':'#dcfce7'};color:${e.estado==='ACTIVO'?'#991b1b':'#166534'};" onclick="toggleEmpleado('${e.id}','${e.estado}')">
+            ${e.estado==='ACTIVO'?'⬇️ Dar de baja':'⬆️ Reactivar'}</button>
+        </td>
+      </tr>`).join('')}
+    </tbody>
+  </table></div>`;
+};
+
+window.abrirFormEmpleado = (id = null) => {
+  const e = id ? empleadosData.find(x=>x.id===id) : { nombre:'',cedula:'',cargo:'',departamento:'',salario_mensual:0,fecha_ingreso:'',banco:'',cuenta_bancaria:'',notas:'' };
+  document.getElementById('modal-content').innerHTML = `
+    <div class="modal-header"><h3>${id?'Editar':'Nuevo'} Empleado</h3><button class="modal-close" onclick="closeModal()">×</button></div>
+    <form onsubmit="guardarEmpleado(event,'${id||''}')">
+      <div class="form-row cols-2">
+        <div><label>Nombre completo *</label><input id="em-nombre" value="${esc(e.nombre)}" required></div>
+        <div><label>Cédula</label><input id="em-cedula" value="${esc(e.cedula||'')}" placeholder="000-0000000-0"></div>
+      </div>
+      <div class="form-row cols-2">
+        <div><label>Cargo / Puesto</label><input id="em-cargo" value="${esc(e.cargo||'')}"></div>
+        <div><label>Departamento</label><input id="em-dpto" value="${esc(e.departamento||'')}"></div>
+      </div>
+      <div class="form-row cols-2">
+        <div><label>Salario Mensual (RD$) *</label><input id="em-salario" type="number" step="0.01" min="0" value="${e.salario_mensual||0}" required></div>
+        <div><label>Fecha de Ingreso</label><input id="em-ingreso" type="date" value="${e.fecha_ingreso||''}"></div>
+      </div>
+      <div class="form-row cols-2">
+        <div><label>Banco</label><input id="em-banco" value="${esc(e.banco||'')}"></div>
+        <div><label>Número de Cuenta</label><input id="em-cuenta" value="${esc(e.cuenta_bancaria||'')}"></div>
+      </div>
+      <div><label>Notas</label><textarea id="em-notas" rows="2" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:8px;">${esc(e.notas||'')}</textarea></div>
+      <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px;">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+        <button type="submit" class="btn btn-primary" id="btn-save-emp">Guardar</button>
+      </div>
+    </form>`;
+  document.getElementById('modal').classList.add('active');
+};
+
+window.guardarEmpleado = async (e, id) => {
+  e.preventDefault();
+  const btn = document.getElementById('btn-save-emp');
+  btn.disabled = true; btn.textContent = 'Guardando...';
+  const datos = {
+    nombre:          document.getElementById('em-nombre').value.trim(),
+    cedula:          document.getElementById('em-cedula').value.trim(),
+    cargo:           document.getElementById('em-cargo').value.trim(),
+    departamento:    document.getElementById('em-dpto').value.trim(),
+    salario_mensual: parseFloat(document.getElementById('em-salario').value||0),
+    fecha_ingreso:   document.getElementById('em-ingreso').value || null,
+    banco:           document.getElementById('em-banco').value.trim(),
+    cuenta_bancaria: document.getElementById('em-cuenta').value.trim(),
+    notas:           document.getElementById('em-notas').value.trim(),
+    empresa_id:      currentEmpresa.id
+  };
+  let result;
+  if (id) result = await supa.from('empleados').update(datos).eq('id', id);
+  else     result = await supa.from('empleados').insert(datos);
+  btn.disabled = false; btn.textContent = 'Guardar';
+  if (result.error) { alert('Error: ' + result.error.message); return; }
+  closeModal();
+  await renderEmpleados();
+};
+
+window.toggleEmpleado = async (id, estadoActual) => {
+  const nuevoEstado = estadoActual === 'ACTIVO' ? 'INACTIVO' : 'ACTIVO';
+  const emp = empleadosData.find(e=>e.id===id);
+  if (estadoActual === 'ACTIVO' && !confirm(`¿Dar de baja a ${emp?.nombre}?\nNo aparecerá en futuras nóminas.`)) return;
+  const { error } = await supa.from('empleados').update({ estado: nuevoEstado }).eq('id', id);
+  if (error) { alert('Error: ' + error.message); return; }
+  await renderEmpleados();
+};
+
+// ─── PROCESAR NÓMINA ───
+window.generarTablaNomina = async () => {
+  const mes      = parseInt(document.getElementById('nom-mes').value);
+  const anio     = parseInt(document.getElementById('nom-anio').value);
+  const quincena = parseInt(document.getElementById('nom-quincena').value);
+  const mesesN   = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  const contenedor = document.getElementById('nomina-tabla-proceso');
+  contenedor.innerHTML = '<div class="loading"><div class="loading-spinner"></div>Generando...</div>';
+
+  // Cargar empleados activos
+  const { data: emps, error } = await supa.from('empleados')
+    .select('*').eq('empresa_id', currentEmpresa.id).eq('estado','ACTIVO').order('nombre');
+  if (error || !emps?.length) {
+    contenedor.innerHTML = '<div class="empty-state">No hay empleados activos. Agrega empleados primero.</div>';
+    return;
+  }
+
+  contenedor.innerHTML = `
+    <div class="card">
+      <h3 style="margin-bottom:4px;">Nómina ${quincena === 1 ? '1ra' : '2da'} Quincena — ${mesesN[mes-1]} ${anio}</h3>
+      <p class="text-muted" style="margin-bottom:16px;font-size:13px;">Ajusta horas extras, días festivos y descuentos por empleado. Los cálculos son automáticos.</p>
+      <div style="overflow-x:auto;">
+      <table id="tbl-nomina-proceso">
+        <thead>
+          <tr style="background:#f0f7ff;">
+            <th>Empleado</th>
+            <th class="num">Salario Quinc.</th>
+            <th class="num" style="color:#0ea5e9;">Hrs. Extras</th>
+            <th class="num" style="color:#0ea5e9;">Días Festivos</th>
+            <th class="num" style="color:#0ea5e9;">Otros Ing.</th>
+            <th class="num" style="background:#fef3c7;">Total Devengado</th>
+            <th class="num" style="color:#ef4444;">AFP Emp.</th>
+            <th class="num" style="color:#ef4444;">SFS Emp.</th>
+            <th class="num" style="color:#ef4444;">ISR</th>
+            <th class="num" style="color:#ef4444;">Préstamos</th>
+            <th class="num" style="color:#ef4444;">Otros Desc.</th>
+            <th class="num" style="background:#dcfce7;color:#166534;">NETO A PAGAR</th>
+            <th class="num" style="color:#7c3aed;">TSS Patronal</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${emps.map((em,i) => {
+            const calc = calcNominaEmpleado(em.salario_mensual,0,0,0,0,0);
+            return `<tr data-empid="${em.id}" data-salario="${em.salario_mensual}">
+              <td><strong>${esc(em.nombre)}</strong><div style="font-size:11px;color:var(--muted);">${esc(em.cargo||'')}</div></td>
+              <td class="num">${fmtNum(calc.salario_quincena)}</td>
+              <td><input type="number" min="0" step="0.5" value="0" data-nom="he"
+                style="width:70px;text-align:right;padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px;"
+                onchange="recalcFila(this)"></td>
+              <td><input type="number" min="0" step="1" value="0" data-nom="df"
+                style="width:60px;text-align:right;padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px;"
+                onchange="recalcFila(this)"></td>
+              <td><input type="number" min="0" step="0.01" value="0" data-nom="oi"
+                style="width:90px;text-align:right;padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px;"
+                onchange="recalcFila(this)"></td>
+              <td class="num" data-nom="devengado" style="font-weight:700;background:#fef9c3;">${fmtNum(calc.total_devengado)}</td>
+              <td class="num" data-nom="afp_emp" style="color:#ef4444;">${fmtNum(calc.afp_empleado)}</td>
+              <td class="num" data-nom="sfs_emp" style="color:#ef4444;">${fmtNum(calc.sfs_empleado)}</td>
+              <td class="num" data-nom="isr" style="color:#ef4444;">${fmtNum(calc.isr)}</td>
+              <td><input type="number" min="0" step="0.01" value="0" data-nom="prest"
+                style="width:90px;text-align:right;padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px;"
+                onchange="recalcFila(this)"></td>
+              <td><input type="number" min="0" step="0.01" value="0" data-nom="odesc"
+                style="width:90px;text-align:right;padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px;"
+                onchange="recalcFila(this)"></td>
+              <td class="num" data-nom="neto" style="font-weight:900;font-size:15px;color:#166534;background:#f0fdf4;">${fmtNum(calc.neto_pagar)}</td>
+              <td class="num" data-nom="tss_pat" style="color:#7c3aed;">${fmtNum(calc.total_tss_patronal)}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+        <tfoot>
+          <tr id="fila-totales-nomina" style="background:#1a2433;color:#fff;font-weight:800;">
+            <td style="padding:10px;">TOTALES (${emps.length} empleados)</td>
+            <td class="num" id="tot-quinc"></td>
+            <td colspan="3"></td>
+            <td class="num" id="tot-dev" style="background:#ca8a04;color:#fff;"></td>
+            <td class="num" id="tot-afp"></td>
+            <td class="num" id="tot-sfs"></td>
+            <td class="num" id="tot-isr"></td>
+            <td class="num" id="tot-prest"></td>
+            <td class="num" id="tot-odesc"></td>
+            <td class="num" id="tot-neto" style="background:#166534;color:#fff;font-size:16px;"></td>
+            <td class="num" id="tot-tss-pat" style="color:#c4b5fd;"></td>
+          </tr>
+        </tfoot>
+      </table></div>
+      <div style="margin-top:20px;display:flex;justify-content:flex-end;gap:12px;">
+        <button class="btn btn-secondary" onclick="exportarNominaExcel()">📊 Exportar Excel</button>
+        <button class="btn btn-primary" onclick="guardarNomina(${mes},${anio},${quincena})" style="font-size:15px;padding:10px 28px;">💾 Guardar Nómina</button>
+      </div>
+    </div>`;
+  actualizarTotalesNomina();
+};
+
+window.recalcFila = (input) => {
+  const tr = input.closest('tr');
+  const salario = parseFloat(tr.dataset.salario || 0);
+  const he   = parseFloat(tr.querySelector('[data-nom="he"]')?.value || 0);
+  const df   = parseFloat(tr.querySelector('[data-nom="df"]')?.value || 0);
+  const oi   = parseFloat(tr.querySelector('[data-nom="oi"]')?.value || 0);
+  const prest = parseFloat(tr.querySelector('[data-nom="prest"]')?.value || 0);
+  const odesc = parseFloat(tr.querySelector('[data-nom="odesc"]')?.value || 0);
+  const c = calcNominaEmpleado(salario, he, df, oi, prest, odesc);
+  tr.querySelector('[data-nom="devengado"]').textContent = fmtNum(c.total_devengado);
+  tr.querySelector('[data-nom="afp_emp"]').textContent  = fmtNum(c.afp_empleado);
+  tr.querySelector('[data-nom="sfs_emp"]').textContent  = fmtNum(c.sfs_empleado);
+  tr.querySelector('[data-nom="isr"]').textContent      = fmtNum(c.isr);
+  tr.querySelector('[data-nom="neto"]').textContent     = fmtNum(c.neto_pagar);
+  tr.querySelector('[data-nom="tss_pat"]').textContent  = fmtNum(c.total_tss_patronal);
+  actualizarTotalesNomina();
+};
+
+window.actualizarTotalesNomina = () => {
+  let tQ=0,tD=0,tA=0,tS=0,tI=0,tP=0,tO=0,tN=0,tT=0;
+  document.querySelectorAll('#tbl-nomina-proceso tbody tr').forEach(tr => {
+    const sal = parseFloat(tr.dataset.salario||0);
+    tQ += sal/2;
+    tD += parseFloat(tr.querySelector('[data-nom="devengado"]')?.textContent?.replace(/,/g,'')||0);
+    tA += parseFloat(tr.querySelector('[data-nom="afp_emp"]')?.textContent?.replace(/,/g,'')||0);
+    tS += parseFloat(tr.querySelector('[data-nom="sfs_emp"]')?.textContent?.replace(/,/g,'')||0);
+    tI += parseFloat(tr.querySelector('[data-nom="isr"]')?.textContent?.replace(/,/g,'')||0);
+    tP += parseFloat(tr.querySelector('[data-nom="prest"]')?.value||0);
+    tO += parseFloat(tr.querySelector('[data-nom="odesc"]')?.value||0);
+    tN += parseFloat(tr.querySelector('[data-nom="neto"]')?.textContent?.replace(/,/g,'')||0);
+    tT += parseFloat(tr.querySelector('[data-nom="tss_pat"]')?.textContent?.replace(/,/g,'')||0);
+  });
+  const s = id => { const el=document.getElementById(id); if(el) el.textContent=fmtNum(tQ>0||tD>0?eval(id.replace('tot-','t').replace('-','').replace('quinc','Q').replace('dev','D').replace('afp','A').replace('sfs','S').replace('isr','I').replace('prest','P').replace('odesc','O').replace('neto','N').replace('tss-pat','T').replace('tss','T')):0); };
+  if(document.getElementById('tot-quinc')) document.getElementById('tot-quinc').textContent=fmtNum(tQ);
+  if(document.getElementById('tot-dev'))   document.getElementById('tot-dev').textContent=fmtNum(tD);
+  if(document.getElementById('tot-afp'))   document.getElementById('tot-afp').textContent=fmtNum(tA);
+  if(document.getElementById('tot-sfs'))   document.getElementById('tot-sfs').textContent=fmtNum(tS);
+  if(document.getElementById('tot-isr'))   document.getElementById('tot-isr').textContent=fmtNum(tI);
+  if(document.getElementById('tot-prest')) document.getElementById('tot-prest').textContent=fmtNum(tP);
+  if(document.getElementById('tot-odesc')) document.getElementById('tot-odesc').textContent=fmtNum(tO);
+  if(document.getElementById('tot-neto'))  document.getElementById('tot-neto').textContent=fmtNum(tN);
+  if(document.getElementById('tot-tss-pat')) document.getElementById('tot-tss-pat').textContent=fmtNum(tT);
+};
+
+window.guardarNomina = async (mes, anio, quincena) => {
+  const mesesN = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  const fechaPago = document.getElementById('nom-fecha-pago')?.value || null;
+  const filas = document.querySelectorAll('#tbl-nomina-proceso tbody tr');
+  if (!filas.length) { alert('No hay empleados en la nómina.'); return; }
+
+  if (!confirm(`¿Guardar la nómina de la ${quincena === 1?'1ra':'2da'} quincena de ${mesesN[mes-1]} ${anio}?`)) return;
+
+  // Construir detalle por empleado
+  const detalle = [];
+  let totDev=0, totDed=0, totNeto=0, totTssPat=0;
+
+  filas.forEach(tr => {
+    const empId  = tr.dataset.empid;
+    const emp    = empleadosData.find(e=>e.id===empId);
+    const salario = parseFloat(tr.dataset.salario||0);
+    const he     = parseFloat(tr.querySelector('[data-nom="he"]')?.value||0);
+    const df     = parseFloat(tr.querySelector('[data-nom="df"]')?.value||0);
+    const oi     = parseFloat(tr.querySelector('[data-nom="oi"]')?.value||0);
+    const prest  = parseFloat(tr.querySelector('[data-nom="prest"]')?.value||0);
+    const odesc  = parseFloat(tr.querySelector('[data-nom="odesc"]')?.value||0);
+    const c = calcNominaEmpleado(salario, he, df, oi, prest, odesc);
+
+    totDev    += c.total_devengado;
+    totDed    += c.total_deducciones;
+    totNeto   += c.neto_pagar;
+    totTssPat += c.total_tss_patronal;
+
+    detalle.push({
+      empresa_id:        currentEmpresa.id,
+      empleado_id:       empId,
+      nombre_empleado:   emp?.nombre || '',
+      salario_mensual:   salario,
+      salario_quincena:  c.salario_quincena,
+      horas_extras:      he,
+      monto_horas_extras: c.monto_horas_extras,
+      dias_fiestas:      df,
+      monto_dias_fiestas: c.monto_dias_fiestas,
+      otros_ingresos:    oi,
+      total_devengado:   c.total_devengado,
+      afp_empleado:      c.afp_empleado,
+      sfs_empleado:      c.sfs_empleado,
+      isr:               c.isr,
+      prestamos:         prest,
+      otros_descuentos:  odesc,
+      total_deducciones: c.total_deducciones,
+      neto_pagar:        c.neto_pagar,
+      afp_patronal:      c.afp_patronal,
+      sfs_patronal:      c.sfs_patronal,
+      srl_patronal:      c.srl_patronal,
+      total_tss_patronal: c.total_tss_patronal
+    });
+  });
+
+  // Guardar cabecera
+  const cabecera = {
+    empresa_id:        currentEmpresa.id,
+    periodo:           `${anio}-${String(mes).padStart(2,'0')}-Q${quincena}`,
+    mes, anio, quincena,
+    fecha_pago:        fechaPago,
+    estado:            'PAGADA',
+    total_devengado:   totDev,
+    total_deducciones: totDed,
+    total_neto:        totNeto,
+    total_tss_patronal: totTssPat
+  };
+
+  const { data: nom, error: errNom } = await supa.from('nominas').insert(cabecera).select().single();
+  if (errNom) { alert('Error al guardar nómina: ' + errNom.message); return; }
+
+  // Guardar detalle
+  detalle.forEach(d => d.nomina_id = nom.id);
+  const { error: errDet } = await supa.from('nomina_detalle').insert(detalle);
+  if (errDet) { alert('Error al guardar detalle: ' + errDet.message); return; }
+
+  alert(`✅ Nómina guardada correctamente.\n\nTotal Devengado:   RD$ ${fmtNum(totDev)}\nTotal Deducciones: RD$ ${fmtNum(totDed)}\nTotal Neto Pagar:  RD$ ${fmtNum(totNeto)}\nTSS Patronal:      RD$ ${fmtNum(totTssPat)}`);
+  document.getElementById('nomina-tabla-proceso').innerHTML = '';
+  switchNominaTab('historial');
+};
+
+// ─── HISTORIAL ───
+window.renderHistorialNominas = async () => {
+  const cont = document.getElementById('historial-nominas');
+  if (!cont) return;
+  cont.innerHTML = '<div class="loading"><div class="loading-spinner"></div>Cargando...</div>';
+
+  const { data, error } = await supa.from('nominas')
+    .select('*').eq('empresa_id', currentEmpresa.id).order('created_at', { ascending: false });
+  if (error) { cont.innerHTML = `<div class="empty-state">Error: ${esc(error.message)}</div>`; return; }
+  nominasData = data || [];
+
+  const mesesN = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+
+  if (!nominasData.length) {
+    cont.innerHTML = '<div class="empty-state">Sin nóminas procesadas. Procesa la primera en la pestaña ⚙️ Procesar Nómina.</div>';
+    return;
+  }
+
+  cont.innerHTML = `<div style="overflow-x:auto;"><table>
+    <thead><tr>
+      <th>Período</th><th>Fecha Pago</th><th class="num">Devengado</th>
+      <th class="num">Deducciones</th><th class="num">Neto Pagado</th>
+      <th class="num">TSS Patronal</th><th>Estado</th><th>Acciones</th>
+    </tr></thead>
+    <tbody>
+      ${nominasData.map(n=>`<tr>
+        <td><strong>${n.quincena===1?'1ra':'2da'} Quincena · ${mesesN[n.mes-1]} ${n.anio}</strong></td>
+        <td>${n.fecha_pago ? fmtDate(n.fecha_pago) : '—'}</td>
+        <td class="num">${fmtNum(n.total_devengado)}</td>
+        <td class="num" style="color:#ef4444;">${fmtNum(n.total_deducciones)}</td>
+        <td class="num"><strong style="color:#166534;">RD$ ${fmtNum(n.total_neto)}</strong></td>
+        <td class="num" style="color:#7c3aed;">${fmtNum(n.total_tss_patronal)}</td>
+        <td><span style="font-size:11px;padding:3px 10px;border-radius:20px;background:#dcfce7;color:#166534;">${n.estado}</span></td>
+        <td>
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;" onclick="verDetalleNomina('${n.id}')">👁️ Ver</button>
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;" onclick="exportarNominaExcelHistorial('${n.id}')">📊</button>
+        </td>
+      </tr>`).join('')}
+    </tbody>
+  </table></div>`;
+};
+
+window.verDetalleNomina = async (nominaId) => {
+  const { data, error } = await supa.from('nomina_detalle')
+    .select('*').eq('nomina_id', nominaId).order('nombre_empleado');
+  if (error || !data?.length) { alert('No se pudo cargar el detalle.'); return; }
+
+  const nom = nominasData.find(n=>n.id===nominaId);
+  const mesesN = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  const titulo = `${nom?.quincena===1?'1ra':'2da'} Quincena · ${mesesN[(nom?.mes||1)-1]} ${nom?.anio||''}`;
+
+  document.getElementById('modal-content').innerHTML = `
+    <div class="modal-header"><h3>📋 Detalle Nómina — ${titulo}</h3><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div style="overflow-x:auto;max-height:70vh;overflow-y:auto;">
+    <table>
+      <thead><tr style="background:#f0f7ff;font-size:12px;">
+        <th>Empleado</th><th class="num">Salario Q.</th><th class="num">H. Extras</th>
+        <th class="num">Días Fest.</th><th class="num">Devengado</th>
+        <th class="num" style="color:#ef4444;">AFP</th><th class="num" style="color:#ef4444;">SFS</th>
+        <th class="num" style="color:#ef4444;">ISR</th><th class="num" style="color:#ef4444;">Préstamos</th>
+        <th class="num" style="color:#166534;">NETO</th><th class="num" style="color:#7c3aed;">TSS Pat.</th>
+      </tr></thead>
+      <tbody>
+        ${data.map(d=>`<tr>
+          <td><strong>${esc(d.nombre_empleado)}</strong></td>
+          <td class="num">${fmtNum(d.salario_quincena)}</td>
+          <td class="num">${d.horas_extras>0?fmtNum(d.monto_horas_extras):'—'}</td>
+          <td class="num">${d.dias_fiestas>0?fmtNum(d.monto_dias_fiestas):'—'}</td>
+          <td class="num" style="font-weight:700;">${fmtNum(d.total_devengado)}</td>
+          <td class="num" style="color:#ef4444;">${fmtNum(d.afp_empleado)}</td>
+          <td class="num" style="color:#ef4444;">${fmtNum(d.sfs_empleado)}</td>
+          <td class="num" style="color:#ef4444;">${fmtNum(d.isr)}</td>
+          <td class="num" style="color:#ef4444;">${fmtNum(d.prestamos)}</td>
+          <td class="num" style="font-weight:900;color:#166534;font-size:14px;">${fmtNum(d.neto_pagar)}</td>
+          <td class="num" style="color:#7c3aed;">${fmtNum(d.total_tss_patronal)}</td>
+        </tr>`).join('')}
+      </tbody>
+      <tfoot><tr style="background:#1a2433;color:#fff;font-weight:800;">
+        <td style="padding:8px;">TOTALES</td>
+        <td class="num">${fmtNum(data.reduce((s,d)=>s+d.salario_quincena,0))}</td>
+        <td colspan="2"></td>
+        <td class="num">${fmtNum(nom?.total_devengado||0)}</td>
+        <td class="num" colspan="4"></td>
+        <td class="num" style="background:#166534;">${fmtNum(nom?.total_neto||0)}</td>
+        <td class="num" style="color:#c4b5fd;">${fmtNum(nom?.total_tss_patronal||0)}</td>
+      </tfoot>
+    </table></div>
+    <!-- Resumen TSS -->
+    <div style="background:#f8fafc;border-radius:10px;padding:16px;margin-top:16px;">
+      <div style="font-weight:700;margin-bottom:10px;">📊 Resumen para TSS</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
+        <div style="background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px;">
+          <div style="font-size:11px;color:var(--muted);">AFP Empleados</div>
+          <div style="font-weight:800;color:#ef4444;">RD$ ${fmtNum(data.reduce((s,d)=>s+d.afp_empleado,0))}</div>
+        </div>
+        <div style="background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px;">
+          <div style="font-size:11px;color:var(--muted);">SFS Empleados</div>
+          <div style="font-weight:800;color:#ef4444;">RD$ ${fmtNum(data.reduce((s,d)=>s+d.sfs_empleado,0))}</div>
+        </div>
+        <div style="background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px;">
+          <div style="font-size:11px;color:var(--muted);">AFP Patronal</div>
+          <div style="font-weight:800;color:#7c3aed;">RD$ ${fmtNum(data.reduce((s,d)=>s+d.afp_patronal,0))}</div>
+        </div>
+        <div style="background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px;">
+          <div style="font-size:11px;color:var(--muted);">SFS Patronal</div>
+          <div style="font-weight:800;color:#7c3aed;">RD$ ${fmtNum(data.reduce((s,d)=>s+d.sfs_patronal,0))}</div>
+        </div>
+        <div style="background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px;">
+          <div style="font-size:11px;color:var(--muted);">SRL (Riesgos Lab.)</div>
+          <div style="font-weight:800;color:#7c3aed;">RD$ ${fmtNum(data.reduce((s,d)=>s+d.srl_patronal,0))}</div>
+        </div>
+        <div style="background:#1a2433;border-radius:8px;padding:12px;">
+          <div style="font-size:11px;color:rgba(255,255,255,.7);">TOTAL TSS A PAGAR</div>
+          <div style="font-weight:900;color:#7dd3fc;font-size:18px;">RD$ ${fmtNum((nom?.total_tss_patronal||0) + data.reduce((s,d)=>s+d.afp_empleado+d.sfs_empleado,0))}</div>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;margin-top:12px;">
+      <button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
+    </div>`;
+  document.getElementById('modal').classList.add('active');
+};
+
+window.exportarNominaExcelHistorial = async (nominaId) => {
+  const { data, error } = await supa.from('nomina_detalle')
+    .select('*').eq('nomina_id', nominaId).order('nombre_empleado');
+  if (error || !data?.length) { alert('No se pudo exportar.'); return; }
+  const nom = nominasData.find(n=>n.id===nominaId);
+  const mesesN = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  const titulo = `Q${nom?.quincena}_${mesesN[(nom?.mes||1)-1]}_${nom?.anio}`;
+  const filas = data.map(d => ({
+    'Empleado': d.nombre_empleado,
+    'Salario Mensual': d.salario_mensual,
+    'Salario Quincena': d.salario_quincena,
+    'Horas Extras': d.horas_extras,
+    'Monto H. Extras': d.monto_horas_extras,
+    'Días Festivos': d.dias_fiestas,
+    'Monto Días Fest.': d.monto_dias_fiestas,
+    'Otros Ingresos': d.otros_ingresos,
+    'Total Devengado': d.total_devengado,
+    'AFP Empleado': d.afp_empleado,
+    'SFS Empleado': d.sfs_empleado,
+    'ISR': d.isr,
+    'Préstamos': d.prestamos,
+    'Otros Descuentos': d.otros_descuentos,
+    'Total Deducciones': d.total_deducciones,
+    'Neto a Pagar': d.neto_pagar,
+    'AFP Patronal': d.afp_patronal,
+    'SFS Patronal': d.sfs_patronal,
+    'SRL Patronal': d.srl_patronal,
+    'TSS Patronal Total': d.total_tss_patronal
+  }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filas), `Nómina ${titulo}`);
+  XLSX.writeFile(wb, `Nomina_${titulo}.xlsx`);
+};
+
 // ==================== CONFIGURACIÓN ====================
 pages.config = () => `
   <div class="page-header"><div><h2>Configuración de Empresa</h2><p>Datos generales de ${esc(currentEmpresa.nombre)}</p></div></div>
@@ -4726,540 +5351,154 @@ window.abrirInvitarUsuario = () => {
         <div id="permisos-grid" style="background:#f8fafc; padding:12px; border-radius:6px; max-height:400px; overflow-y:auto;">
           ${MODULOS_PERMISO.map(m => `
             <div style="display:grid; grid-template-columns:200px repeat(4, 1fr); gap:10px; align-items:center; padding:6px 0; border-bottom:1px solid var(--border);">
-              <div style="font-size:13px;">${m.icon} ${m.label}</div>
-              ${ACCIONES_PERMISO.map(a => `<label style="font-size:11px; display:flex; align-items:center; gap:4px;"><input type="checkbox" data-modulo="${m.key}" data-accion="${a}" style="width:auto;">${a}</label>`).join('')}
-            </div>
-          `).join('')}
-        </div>
-        <div style="display:flex; gap:6px; margin-top:8px;">
-          <button type="button" class="btn btn-sm btn-secondary" onclick="aplicarPresetPerm('todo')">✓ Marcar todo</button>
-          <button type="button" class="btn btn-sm btn-secondary" onclick="aplicarPresetPerm('soloVer')">👁 Solo ver</button>
-          <button type="button" class="btn btn-sm btn-secondary" onclick="aplicarPresetPerm('soloFacturas')">🧾 Solo Facturas</button>
-          <button type="button" class="btn btn-sm btn-secondary" onclick="aplicarPresetPerm('soloCompras')">📥 Solo Compras</button>
-          <button type="button" class="btn btn-sm btn-secondary" onclick="aplicarPresetPerm('limpiar')">✗ Limpiar</button>
+              <div style="font-size:13px;font-weight:600;">${m.icon} ${m.label}</div>
+              <div style="text-align:center;"><label style="font-size:11px;display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer;"><input type="checkbox" data-mod="${m.key}" data-perm="view" checked> Ver</label></div>
+              <div style="text-align:center;"><label style="font-size:11px;display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer;"><input type="checkbox" data-mod="${m.key}" data-perm="create" checked> Crear</label></div>
+              <div style="text-align:center;"><label style="font-size:11px;display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer;"><input type="checkbox" data-mod="${m.key}" data-perm="edit" checked> Editar</label></div>
+              <div style="text-align:center;"><label style="font-size:11px;display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer;"><input type="checkbox" data-mod="${m.key}" data-perm="delete"> Eliminar</label></div>
+            </div>`).join('')}
         </div>
       </div>
-      <div class="modal-footer">
+      <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px;">
         <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-        <button type="submit" class="btn btn-primary">Enviar Invitación</button>
+        <button type="submit" class="btn btn-primary" id="btn-inv">📧 Enviar Invitación</button>
       </div>
-    </form>
-  `;
+    </form>`;
   document.getElementById('modal').classList.add('active');
-  togglePermisosForm();
 };
 
 window.togglePermisosForm = () => {
-  const rol = document.getElementById('inv-rol').value;
+  const rol = document.getElementById('inv-rol')?.value;
   const cont = document.getElementById('permisos-form-container');
-  if (rol === 'admin') {
-    cont.style.opacity = '0.5';
-    cont.style.pointerEvents = 'none';
-  } else {
-    cont.style.opacity = '1';
-    cont.style.pointerEvents = 'auto';
-  }
-  if (rol === 'visualizador') {
-    aplicarPresetPerm('soloVer');
-  }
-};
-
-window.aplicarPresetPerm = (preset) => {
-  const checks = document.querySelectorAll('#permisos-grid input[type="checkbox"]');
-  checks.forEach(c => c.checked = false);
-  if (preset === 'todo') checks.forEach(c => c.checked = true);
-  else if (preset === 'soloVer') checks.forEach(c => { if (c.dataset.accion === 'view') c.checked = true; });
-  else if (preset === 'soloFacturas') {
-    ['facturas','clientes','productos'].forEach(m => {
-      ['view','create','edit'].forEach(a => {
-        const c = document.querySelector(`#permisos-grid input[data-modulo="${m}"][data-accion="${a}"]`);
-        if (c) c.checked = true;
-      });
-    });
-  } else if (preset === 'soloCompras') {
-    ['compras','proveedores','formato606'].forEach(m => {
-      ['view','create','edit'].forEach(a => {
-        const c = document.querySelector(`#permisos-grid input[data-modulo="${m}"][data-accion="${a}"]`);
-        if (c) c.checked = true;
-      });
-    });
-  }
+  if (cont) cont.style.display = (rol === 'admin' || rol === 'visualizador') ? 'none' : 'block';
 };
 
 window.invitarUsuarioCloud = async (e) => {
   e.preventDefault();
-  const email = document.getElementById('inv-email').value.trim().toLowerCase();
-  const rol = document.getElementById('inv-rol').value;
-  const permisos = {};
-  document.querySelectorAll('#permisos-grid input[type="checkbox"]:checked').forEach(c => {
-    const m = c.dataset.modulo, a = c.dataset.accion;
-    if (!permisos[m]) permisos[m] = [];
-    permisos[m].push(a);
-  });
+  const btn = document.getElementById('btn-inv');
+  btn.disabled = true; btn.textContent = 'Enviando...';
+  const email = document.getElementById('inv-email').value.trim();
+  const rol   = document.getElementById('inv-rol').value;
 
-  const yaExiste = usuariosData.find(u => u.user_email && u.user_email.toLowerCase() === email);
-  if (yaExiste) { alert('Este email ya tiene acceso a la empresa. Edita sus permisos en su lugar.'); return; }
+  let permisos = {};
+  if (rol === 'admin') {
+    MODULOS_PERMISO.forEach(m => { permisos[m.key] = { view:true, create:true, edit:true, delete:true }; });
+  } else if (rol === 'visualizador') {
+    MODULOS_PERMISO.forEach(m => { permisos[m.key] = { view:true, create:false, edit:false, delete:false }; });
+  } else {
+    MODULOS_PERMISO.forEach(m => {
+      permisos[m.key] = {
+        view:   document.querySelector(`[data-mod="${m.key}"][data-perm="view"]`)?.checked   || false,
+        create: document.querySelector(`[data-mod="${m.key}"][data-perm="create"]`)?.checked || false,
+        edit:   document.querySelector(`[data-mod="${m.key}"][data-perm="edit"]`)?.checked   || false,
+        delete: document.querySelector(`[data-mod="${m.key}"][data-perm="delete"]`)?.checked || false,
+      };
+    });
+  }
 
-  const datos = {
+  const redirectTo = window.location.href.split('?')[0];
+  const { data, error } = await supa.auth.admin ? 
+    { data: null, error: { message: 'Use Supabase dashboard for admin invitations' } } :
+    await supa.functions.invoke('invite-user', { body: { email, empresa_id: currentEmpresa.id, rol, permisos, redirectTo } })
+    .catch(() => ({ data: null, error: { message: 'Edge function no disponible' } }));
+
+  // Fallback: create membership record with pending status
+  const { error: memErr } = await supa.from('memberships').upsert({
     empresa_id: currentEmpresa.id,
     user_email: email,
-    user_id: null,
-    rol,
-    permisos,
-    estado: 'pendiente',
-    invitado_por: session.user.id
-  };
-  const { error } = await supa.from('memberships').insert(datos);
-  if (error) { alert('Error: ' + error.message); return; }
+    rol, permisos,
+    estado: 'pendiente'
+  }, { onConflict: 'empresa_id,user_email' });
 
-  // Intentar enviar email de invitación via Magic Link (Supabase Auth)
-  let emailEnviado = false;
-  let emailError = '';
-  let rateLimitSegundos = 0;
-  try {
-    const redirectUrl = window.location.origin + window.location.pathname;
-    const { error: otpErr } = await supa.auth.signInWithOtp({
-      email: email,
-      options: { shouldCreateUser: true, emailRedirectTo: redirectUrl }
-    });
-    if (otpErr) {
-      emailError = otpErr.message;
-      // Detectar rate limit y extraer segundos
-      const rateLimitMatch = otpErr.message.match(/after (\d+) seconds/i);
-      if (rateLimitMatch) {
-        rateLimitSegundos = parseInt(rateLimitMatch[1]);
-      }
-    } else {
-      emailEnviado = true;
-    }
-  } catch (err) {
-    emailError = err.message || 'Error desconocido';
-  }
+  btn.disabled = false; btn.textContent = '📧 Enviar Invitación';
 
-  // Audit log: invitación enviada
-  await logAudit('usuarios', 'invitar', null, { email: email, rol: rol, email_enviado: emailEnviado });
-
+  if (memErr) { alert('Error: ' + memErr.message); return; }
+  alert(`✅ Invitación registrada para ${email}.\n\nEl usuario debe crear su cuenta con ese email en:\n${redirectTo}\n\nUna vez registrado, tendrá acceso automático.`);
   closeModal();
-  await after_usuarios();
-
-  const urlSistema = window.location.origin + window.location.pathname;
-  mostrarModalInvitacionEnviada(email, urlSistema, emailEnviado, emailError, rateLimitSegundos);
+  await window.after_usuarios();
 };
 
-window.mostrarModalInvitacionEnviada = (email, url, emailOk, emailErr, rateLimitSeg = 0) => {
-  const esRateLimit = rateLimitSeg > 0;
-  document.getElementById('modal-content').className = 'modal';
+window.eliminarUsuarioCloud = async (membId) => {
+  if (!confirm('¿Eliminar este usuario de la empresa?')) return;
+  const { error } = await supa.from('memberships').delete().eq('id', membId);
+  if (error) { alert('Error: ' + error.message); return; }
+  await window.after_usuarios();
+};
+
+window.editarPermisos = (membId) => {
+  const m = usuariosData.find(u=>u.id===membId);
+  if (!m) return;
+  const perms = m.permisos || {};
   document.getElementById('modal-content').innerHTML = `
-    <div class="modal-header">
-      <h3>${emailOk ? '✓ Invitación creada y email enviado' : (esRateLimit ? '⏱ Invitación creada (espera para enviar email)' : '⚠ Invitación creada (sin email)')}</h3>
-      <button class="modal-close" onclick="closeModal()">×</button>
+    <div class="modal-header"><h3>Permisos — ${esc(m.user_email)}</h3><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div style="background:#f8fafc;padding:12px;border-radius:8px;max-height:60vh;overflow-y:auto;">
+      ${MODULOS_PERMISO.map(mod => `
+        <div style="display:grid;grid-template-columns:200px repeat(4,1fr);gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);">
+          <div style="font-size:13px;font-weight:600;">${mod.icon} ${mod.label}</div>
+          ${['view','create','edit','delete'].map(p=>`
+            <label style="font-size:11px;display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer;">
+              <input type="checkbox" data-mod="${mod.key}" data-perm="${p}" ${perms[mod.key]?.[p]?'checked':''}>
+              ${p==='view'?'Ver':p==='create'?'Crear':p==='edit'?'Editar':'Elim.'}
+            </label>`).join('')}
+        </div>`).join('')}
     </div>
-
-    <div style="background:${emailOk?'#d4f4dd':(esRateLimit?'#d4ecf7':'#fff8ec')}; padding:12px 14px; border-radius:8px; margin-bottom:14px; font-size:13px; color:${emailOk?'#1a7c3a':(esRateLimit?'#0a5a7a':'#8a5e12')};">
-      ${emailOk
-        ? `<strong>📧 Se envió un correo de invitación a:</strong><br><span style="font-size:14px;">${esc(email)}</span><br><br>El correo viene de Supabase (puede llegar a la carpeta <strong>Spam/Correo no deseado</strong>). Contiene un enlace mágico que crea su cuenta y lo lleva directamente al sistema.`
-        : (esRateLimit
-          ? `<strong>⏱ Límite de Supabase activado.</strong><br>Por seguridad, solo se puede enviar 1 email a la misma dirección cada ${rateLimitSeg} segundos.<br><br><strong>La invitación SI quedó registrada</strong> en tu sistema. Puedes:<br>• Esperar <span id="cuenta-reg">${rateLimitSeg}</span> segundos y darle <strong>"Reenviar email"</strong> abajo<br>• O simplemente <strong>copiar el link</strong> y enviárselo por WhatsApp/Email`
-          : `<strong>No se pudo enviar el email automáticamente.</strong><br>Motivo: ${esc(emailErr)}<br><br>La invitación quedó registrada, pero deberás compartir el acceso manualmente.`
-        )
-      }
-    </div>
-
-    ${esRateLimit ? `<div style="margin-bottom:14px; text-align:center;">
-      <button class="btn btn-primary" id="btn-reenviar" onclick="reenviarEmailInvitacion('${esc(email)}')" disabled>⏱ Esperando...</button>
-    </div>` : ''}
-
-    <div style="background:#f4f7fa; padding:14px; border-radius:8px; margin-bottom:14px;">
-      <label style="display:block; margin-bottom:6px; font-weight:600; color:var(--primary-dark);">🔗 Link del sistema (compártelo por WhatsApp/Email):</label>
-      <div style="display:flex; gap:6px;">
-        <input id="inv-share-url" value="${esc(url)}" readonly style="flex:1; font-family:monospace; font-size:12px;">
-        <button class="btn btn-primary btn-sm" onclick="copiarUrlInvitacion()">📋 Copiar</button>
-      </div>
-    </div>
-
-    <div style="background:#eef7ff; padding:12px 14px; border-radius:8px; font-size:12px; color:var(--primary-dark); line-height:1.6;">
-      <strong>📋 Pasos que debe seguir ${esc(email)}:</strong>
-      <ol style="margin:6px 0 0 22px; padding:0;">
-        <li>${emailOk ? 'Abrir el correo que le acabamos de enviar (revisar Spam si no aparece en bandeja principal) y hacer clic en el enlace mágico, <strong>O</strong> abrir el link de arriba que tú le envíes' : 'Abrir el link de arriba que tú le envíes'}</li>
-        <li>Registrarse con el email exacto: <strong>${esc(email)}</strong></li>
-        <li>Iniciar sesión — automáticamente quedará vinculado a "${esc(currentEmpresa.nombre)}" con los permisos que le asignaste</li>
-      </ol>
-    </div>
-
-    <div class="modal-footer">
-      <button class="btn btn-primary" onclick="closeModal()">Entendido</button>
-    </div>
-  `;
+    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px;">
+      <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="guardarPermisos('${membId}')">💾 Guardar</button>
+    </div>`;
   document.getElementById('modal').classList.add('active');
 };
 
-window.copiarUrlInvitacion = () => {
-  const input = document.getElementById('inv-share-url');
-  input.select();
-  try {
-    navigator.clipboard.writeText(input.value);
-    const btn = event.target;
-    const orig = btn.textContent;
-    btn.textContent = '✓ Copiado';
-    setTimeout(() => btn.textContent = orig, 1500);
-  } catch(e) {
-    document.execCommand('copy');
-    alert('Link copiado al portapapeles');
-  }
-};
-
-window.editarPermisos = (id) => {
-  const u = usuariosData.find(x => x.id === id);
-  if (!u) return;
-  document.getElementById('modal-content').className = 'modal wide';
-  document.getElementById('modal-content').innerHTML = `
-    <div class="modal-header"><h3>Editar Permisos de ${esc(u.user_email)}</h3><button class="modal-close" onclick="closeModal()">×</button></div>
-    <form onsubmit="guardarPermisos(event, '${id}')">
-      <div class="form-row">
-        <div><label>Rol</label>
-          <select id="edit-rol">
-            <option value="admin" ${u.rol==='admin'?'selected':''}>Admin</option>
-            <option value="colaborador" ${u.rol==='colaborador'?'selected':''}>Colaborador</option>
-            <option value="visualizador" ${u.rol==='visualizador'?'selected':''}>Visualizador</option>
-          </select>
-        </div>
-      </div>
-      <label style="margin-top:10px;">Permisos por módulo</label>
-      <div id="edit-permisos-grid" style="background:#f8fafc; padding:12px; border-radius:6px; max-height:400px; overflow-y:auto;">
-        ${MODULOS_PERMISO.map(m => {
-          const perms = u.permisos?.[m.key] || [];
-          return `<div style="display:grid; grid-template-columns:200px repeat(4, 1fr); gap:10px; align-items:center; padding:6px 0; border-bottom:1px solid var(--border);">
-            <div style="font-size:13px;">${m.icon} ${m.label}</div>
-            ${ACCIONES_PERMISO.map(a => `<label style="font-size:11px; display:flex; align-items:center; gap:4px;"><input type="checkbox" data-modulo="${m.key}" data-accion="${a}" ${perms.includes(a)?'checked':''} style="width:auto;">${a}</label>`).join('')}
-          </div>`;
-        }).join('')}
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-        <button type="submit" class="btn btn-primary">Guardar</button>
-      </div>
-    </form>
-  `;
-  document.getElementById('modal').classList.add('active');
-};
-
-window.guardarPermisos = async (e, id) => {
-  e.preventDefault();
-  const rol = document.getElementById('edit-rol').value;
-  const permisos = {};
-  document.querySelectorAll('#edit-permisos-grid input[type="checkbox"]:checked').forEach(c => {
-    const m = c.dataset.modulo, a = c.dataset.accion;
-    if (!permisos[m]) permisos[m] = [];
-    permisos[m].push(a);
+window.guardarPermisos = async (membId) => {
+  const nuevosPerms = {};
+  MODULOS_PERMISO.forEach(m => {
+    nuevosPerms[m.key] = {
+      view:   document.querySelector(`[data-mod="${m.key}"][data-perm="view"]`)?.checked   || false,
+      create: document.querySelector(`[data-mod="${m.key}"][data-perm="create"]`)?.checked || false,
+      edit:   document.querySelector(`[data-mod="${m.key}"][data-perm="edit"]`)?.checked   || false,
+      delete: document.querySelector(`[data-mod="${m.key}"][data-perm="delete"]`)?.checked || false,
+    };
   });
-  const { error } = await supa.from('memberships').update({ rol, permisos }).eq('id', id);
+  const { error } = await supa.from('memberships').update({ permisos: nuevosPerms }).eq('id', membId);
   if (error) { alert('Error: ' + error.message); return; }
   closeModal();
-  await after_usuarios();
-};
-
-window.eliminarUsuarioCloud = async (id) => {
-  const u = usuariosData.find(x => x.id === id);
-  if (!u) return;
-  if (u.rol === 'owner') { alert('No se puede eliminar al owner de la empresa.'); return; }
-  if (!confirm(`¿Eliminar el acceso de ${u.user_email} a esta empresa?`)) return;
-  const { error } = await supa.from('memberships').delete().eq('id', id);
-  if (error) { alert('Error: ' + error.message); return; }
-  await after_usuarios();
-};
-
-// ==================== CAPTURA CON IA (Tesseract OCR) ====================
-pages.captura = () => `
-  <div class="page-header">
-    <div><h2>Captura de Factura con IA</h2><p>Sube una foto y extraemos los datos automáticamente</p></div>
-  </div>
-  <div class="card">
-    <div style="background:#eef7ff; padding:12px; border-radius:6px; margin-bottom:15px; font-size:13px; color:var(--primary-dark);">
-      📸 <strong>Cómo funciona:</strong>
-      <ol style="margin-left:20px; margin-top:8px;">
-        <li>Sube o toma una foto de la factura (clara, sin sombras)</li>
-        <li>El sistema extraerá el texto usando OCR</li>
-        <li>Detectamos automáticamente RNC, NCF, fecha y montos</li>
-        <li>Revisa los datos y guarda como Compra (606)</li>
-      </ol>
-    </div>
-    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:15px;">
-      <input type="file" id="ocr-file" accept="image/*" capture="environment" onchange="procesarImagenOCR(event)">
-      <span class="text-muted" style="font-size:12px;">En celular puedes tomar foto directamente con la cámara</span>
-    </div>
-    <div id="ocr-status"></div>
-    <div id="ocr-preview" style="display:none; margin-top:15px;"></div>
-    <div id="ocr-resultados" style="display:none; margin-top:15px;"></div>
-  </div>
-`;
-
-window.procesarImagenOCR = async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  if (typeof Tesseract === 'undefined') {
-    document.getElementById('ocr-status').innerHTML = '<div style="color:var(--danger); padding:10px;">⚠ Librería OCR no cargada. Verifica tu conexión a internet.</div>';
-    return;
-  }
-
-  const reader = new FileReader();
-  reader.onload = (ev) => {
-    document.getElementById('ocr-preview').style.display = 'block';
-    document.getElementById('ocr-preview').innerHTML = `
-      <h4>Vista previa</h4>
-      <img src="${ev.target.result}" style="max-width:400px; max-height:300px; border-radius:6px; border:1px solid var(--border);">
-    `;
-  };
-  reader.readAsDataURL(file);
-
-  document.getElementById('ocr-status').innerHTML = '<div style="padding:12px; background:#fff8ec; border-radius:6px;"><div class="loading-spinner" style="width:20px;height:20px;display:inline-block;vertical-align:middle;"></div> Procesando imagen con OCR... (puede tardar 10-30 segundos)</div>';
-
-  try {
-    const { data: { text } } = await Tesseract.recognize(file, 'spa', {
-      logger: m => {
-        if (m.status === 'recognizing text') {
-          document.getElementById('ocr-status').innerHTML = `<div style="padding:12px; background:#fff8ec; border-radius:6px;">Procesando... ${Math.round(m.progress*100)}%</div>`;
-        }
-      }
-    });
-    document.getElementById('ocr-status').innerHTML = '<div style="padding:10px; background:#d4f4dd; color:#1a7c3a; border-radius:6px;">✓ Texto extraído correctamente</div>';
-    extraerDatosFactura(text);
-  } catch (err) {
-    document.getElementById('ocr-status').innerHTML = `<div style="padding:10px; color:var(--danger);">Error: ${err.message}</div>`;
-  }
-};
-
-function extraerDatosFactura(text) {
-  // Detección de NCF: soporta tanto formato tradicional (B01-B17) como electrónico (E31, E32, E33, E34, E41, E43, E44, E45, E47)
-  // Formato: 1 letra + 2 dígitos tipo + 8 dígitos secuencial = 11 caracteres total
-  const ncfMatch = text.match(/\b([BE]\d{2}\d{8})\b/i) || text.match(/\b([BE]\d{10,11})\b/i);
-
-  // Detección de TODOS los RNC/Cédulas presentes (puede haber proveedor y cliente)
-  const rncMatches = [...text.matchAll(/\b(\d{3}-?\d{5}-?\d{1}|\d{9}|\d{3}-?\d{7}-?\d{1}|\d{11})\b/g)];
-  const rncsEncontrados = rncMatches.map(m => m[0].replace(/-/g, '')).filter((v,i,a) => a.indexOf(v)===i); // únicos
-  // El RNC propio (de la empresa actual) lo excluimos
-  const rncEmpresa = (currentEmpresa.rnc||'').replace(/[^0-9]/g,'');
-  const rncsExternos = rncsEncontrados.filter(r => r !== rncEmpresa);
-  const rncProveedor = rncsExternos[0] || '';
-  const rncCliente = rncsExternos[1] || '';
-
-  // Fecha
-  const fechaMatch = text.match(/\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/);
-
-  // Detección inteligente de montos usando palabras clave
-  const lineas = text.split(/[\n\r]+/);
-  const buscarMontoCercaDe = (palabras) => {
-    const regexMonto = /\b(\d{1,3}(?:[,.]?\d{3})*[,.]\d{2})\b/g;
-    for (const linea of lineas) {
-      const lineaLower = linea.toLowerCase();
-      for (const palabra of palabras) {
-        if (lineaLower.includes(palabra)) {
-          const matches = [...linea.matchAll(regexMonto)];
-          if (matches.length > 0) {
-            // Tomar el último monto en la línea (suele estar a la derecha)
-            const m = matches[matches.length - 1][0];
-            const valor = parseFloat(m.replace(/,/g, ''));
-            if (!isNaN(valor) && valor > 0) return valor;
-          }
-        }
-      }
-    }
-    return null;
-  };
-
-  // Buscar montos por palabras clave
-  let total = buscarMontoCercaDe(['total general', 'total a pagar', 'total rd', 'total $', 'total:', 'monto total']);
-  let subtotal = buscarMontoCercaDe(['subtotal', 'sub total', 'sub-total', 'base imponible', 'monto gravado']);
-  let itbis = buscarMontoCercaDe(['itbis', 'i.t.b.i.s', 'impuesto']);
-
-  // Fallback: si no encuentra por palabra clave, usar el método de mayor monto
-  const todosMontos = (text.match(/\b\d{1,3}(?:[,.]?\d{3})*[,.]\d{2}\b/g) || [])
-    .map(m => parseFloat(m.replace(/,/g, '')))
-    .filter(n => !isNaN(n) && n > 0)
-    .sort((a,b) => b - a);
-
-  if (!total && todosMontos.length > 0) total = todosMontos[0];
-
-  // Si tenemos total pero no subtotal/itbis, calcularlos asumiendo 18%
-  if (total && !subtotal && !itbis) {
-    subtotal = +(total / 1.18).toFixed(2);
-    itbis = +(total - subtotal).toFixed(2);
-  } else if (total && subtotal && !itbis) {
-    itbis = +(total - subtotal).toFixed(2);
-  } else if (total && itbis && !subtotal) {
-    subtotal = +(total - itbis).toFixed(2);
-  } else if (subtotal && itbis && !total) {
-    total = +(subtotal + itbis).toFixed(2);
-  }
-
-  // Validación: si subtotal + itbis != total, recalcular subtotal a partir del total (más confiable)
-  if (total && subtotal && itbis && Math.abs((subtotal + itbis) - total) > 1) {
-    // El total es lo más confiable. Recalcular subtotal = total - itbis (mantener ITBIS si parece razonable)
-    if (itbis > 0 && itbis < total * 0.25) {
-      subtotal = +(total - itbis).toFixed(2);
-    } else {
-      // ITBIS inválido, asumir 18%
-      subtotal = +(total / 1.18).toFixed(2);
-      itbis = +(total - subtotal).toFixed(2);
-    }
-  }
-
-  subtotal = subtotal || 0;
-  itbis = itbis || 0;
-  total = total || 0;
-
-  let fechaISO = todayDate();
-  if (fechaMatch) {
-    const parts = fechaMatch[0].split(/[\/\-]/);
-    if (parts.length === 3) {
-      let [d, m, y] = parts.map(p => p.padStart(2,'0'));
-      if (y.length === 2) y = '20' + y;
-      fechaISO = `${y}-${m}-${d}`;
-    }
-  }
-
-  // Detectar tipo de NCF para clasificar (compra vs venta)
-  const ncf = ncfMatch ? ncfMatch[0].toUpperCase() : '';
-  const esElectronico = ncf.startsWith('E');
-  const tipoNCF = ncf ? ncf.substring(0, 3) : '';
-
-  document.getElementById('ocr-resultados').style.display = 'block';
-  document.getElementById('ocr-resultados').innerHTML = `
-    <h4>📋 Datos Extraídos</h4>
-    <div style="background:#f8fafc; padding:15px; border-radius:6px;">
-      ${ncf ? `<div style="background:${esElectronico?'#d4ecf7':'#fff8ec'}; padding:8px 12px; border-radius:6px; margin-bottom:12px; font-size:12px;">
-        ${esElectronico ? '⚡ <strong>NCF Electrónico</strong> detectado' : '📄 <strong>NCF Tradicional</strong> detectado'} · Tipo: <strong>${tipoNCF}</strong>
-      </div>` : ''}
-      <div class="form-row cols-2">
-        <div><label>RNC del Proveedor</label><input id="ocr-rnc-prov" value="${esc(rncProveedor)}" placeholder="RNC del que emite"></div>
-        <div><label>RNC del Cliente</label><input id="ocr-rnc-cli" value="${esc(rncCliente)}" placeholder="RNC del que recibe"></div>
-      </div>
-      <div class="form-row cols-2">
-        <div><label>NCF detectado</label><input id="ocr-ncf" value="${esc(ncf)}"></div>
-        <div><label>Fecha</label><input type="date" id="ocr-fecha" value="${fechaISO}"></div>
-      </div>
-      <div class="form-row cols-3">
-        <div><label>Subtotal (sin ITBIS)</label><input type="number" step="0.01" id="ocr-subtotal" value="${subtotal.toFixed(2)}"></div>
-        <div><label>ITBIS (18%)</label><input type="number" step="0.01" id="ocr-itbis" value="${itbis.toFixed(2)}"></div>
-        <div><label>TOTAL</label><input type="number" step="0.01" id="ocr-total" value="${total.toFixed(2)}" style="font-weight:bold;"></div>
-      </div>
-      <div style="background:#fff8ec; padding:8px 12px; border-radius:6px; margin-top:10px; font-size:11px; color:#8a5e12;">
-        💡 <strong>Verifica los montos manualmente.</strong> El OCR puede equivocarse — el total general suele ser correcto, pero subtotal/ITBIS pueden necesitar ajuste.
-      </div>
-      <button class="btn btn-primary" onclick="usarDatosOCR()" style="margin-top:10px;">📥 Crear Compra con estos datos</button>
-    </div>
-    <details style="margin-top:15px;">
-      <summary style="cursor:pointer; color:var(--muted); font-size:13px;">Ver texto completo extraído</summary>
-      <pre style="background:#f8fafc; padding:12px; border-radius:6px; font-size:11px; white-space:pre-wrap; max-height:300px; overflow-y:auto; margin-top:8px;">${esc(text)}</pre>
-    </details>
-  `;
-}
-
-window.usarDatosOCR = () => {
-  abrirFormCompraCloud();
-  setTimeout(() => {
-    const rncProv = document.getElementById('ocr-rnc-prov')?.value || '';
-    const ncf = document.getElementById('ocr-ncf')?.value;
-    const fecha = document.getElementById('ocr-fecha')?.value;
-    const subtotal = parseFloat(document.getElementById('ocr-subtotal')?.value) || 0;
-    const itbis = parseFloat(document.getElementById('ocr-itbis')?.value) || 0;
-    if (document.getElementById('co-rnc')) document.getElementById('co-rnc').value = rncProv;
-    if (document.getElementById('co-ncf')) document.getElementById('co-ncf').value = ncf;
-    if (document.getElementById('co-fecha')) document.getElementById('co-fecha').value = fecha;
-    if (document.getElementById('co-mBienes')) document.getElementById('co-mBienes').value = subtotal;
-    if (document.getElementById('co-itbis')) document.getElementById('co-itbis').value = itbis;
-    if (typeof recalcCompraCloud === 'function') recalcCompraCloud();
-  }, 300);
+  await window.after_usuarios();
 };
 
 // ==================== AUDIT LOG ====================
 pages.auditlog = () => `
   <div class="page-header">
     <div><h2>Audit Log</h2><p>Actividad reciente en ${esc(currentEmpresa.nombre)}</p></div>
-    <div style="display:flex; gap:8px;">
-      <button class="btn btn-warning" onclick="testAuditLog()" title="Inserta un registro de prueba para verificar que funciona">🧪 Test</button>
-      <button class="btn btn-secondary" onclick="after_auditlog()">🔄 Refrescar</button>
-    </div>
+    <button class="btn btn-secondary" onclick="after_auditlog()">🔄 Actualizar</button>
   </div>
-  <div style="background:#eef7ff; padding:10px 14px; border-radius:8px; margin-bottom:15px; font-size:12px; color:var(--primary-dark);">
-    💡 El <strong>Audit Log</strong> registra automáticamente cada acción importante: crear/editar/eliminar asientos, clientes, facturas, compras, invitar usuarios. Sirve como historial de auditoría y trazabilidad.
+  <div class="card">
+    <div id="auditlog-tabla"><div class="loading"><div class="loading-spinner"></div>Cargando...</div></div>
   </div>
-  <div class="card"><div id="audit-tabla"><div class="loading"><div class="loading-spinner"></div>Cargando...</div></div></div>
 `;
 
-window.testAuditLog = async () => {
-  const btn = event.target;
-  btn.disabled = true; btn.textContent = 'Probando...';
-  const antes = await supa.from('audit_log').select('id', { count: 'exact', head: true }).eq('empresa_id', currentEmpresa.id);
-  console.log('[AuditLog Test] Registros antes:', antes.count);
-
-  const result = await supa.from('audit_log').insert({
-    empresa_id: currentEmpresa.id,
-    user_id: session.user.id,
-    user_email: session.user.email,
-    modulo: 'sistema',
-    accion: 'test',
-    entidad_id: null,
-    detalles: { nota: 'Prueba manual desde el botón de Test', timestamp: new Date().toISOString() }
-  }).select();
-
-  btn.disabled = false; btn.textContent = '🧪 Test';
-
-  if (result.error) {
-    alert('❌ FALLA en la inserción:\n\n' +
-      'Código: ' + (result.error.code || 'sin código') + '\n' +
-      'Mensaje: ' + result.error.message + '\n\n' +
-      'Causa probable: las políticas RLS de Supabase no permiten escribir en audit_log.\n\n' +
-      'Solución: ejecuta el SQL "fix-auditlog.sql" en Supabase para corregir las políticas. ' +
-      'Te lo voy a generar.');
-    console.error('[AuditLog Test] Error:', result.error);
-    return;
-  }
-
-  alert('✓ ¡Audit Log funciona correctamente!\n\n' +
-    'Se insertó un registro de prueba. Verás aparecer una fila con módulo "sistema" y acción "test".\n\n' +
-    'A partir de ahora cada crear/editar/eliminar quedará registrado aquí.');
-  await after_auditlog();
-};
-
 window.after_auditlog = async () => {
-  const { data, error } = await supa.from('audit_log').select('*').eq('empresa_id', currentEmpresa.id).order('created_at', { ascending: false }).limit(200);
-  if (error) {
-    document.getElementById('audit-tabla').innerHTML = `<div class="empty-state" style="color:var(--danger);">
-      <strong>Error al cargar Audit Log:</strong> ${esc(error.message)}<br>
-      <small>Código: ${esc(error.code||'sin código')}</small><br>
-      <small>Probable causa: políticas RLS bloqueando lectura. Ejecuta fix-auditlog.sql en Supabase.</small>
-    </div>`;
-    console.error('[AuditLog] Error al leer:', error);
-    return;
-  }
-  const logs = data || [];
-  if (logs.length === 0) {
-    document.getElementById('audit-tabla').innerHTML = `<div class="empty-state">
-      <p>Sin actividad registrada todavía en <strong>${esc(currentEmpresa.nombre)}</strong>.</p>
-      <p style="margin-top:8px; font-size:12px;">Crea/edita/elimina un asiento, factura o compra y vuelve a refrescar para verlo aparecer aquí.</p>
-      <p style="margin-top:8px; font-size:12px;">O presiona <strong>🧪 Test</strong> arriba para verificar que las políticas de inserción funcionan.</p>
-    </div>`;
-    return;
-  }
-  document.getElementById('audit-tabla').innerHTML = `
-    <table>
-      <thead><tr><th style="width:180px;">Fecha</th><th>Usuario</th><th style="width:130px;">Módulo</th><th style="width:120px;">Acción</th><th>Detalle</th></tr></thead>
-      <tbody>${logs.map(l => `<tr>
-        <td><small>${new Date(l.created_at).toLocaleString('es-DO')}</small></td>
-        <td>${esc(l.user_email||'-')}</td>
-        <td><span class="badge badge-info">${esc(l.modulo)}</span></td>
-        <td>${esc(l.accion)}</td>
-        <td><small>${esc(JSON.stringify(l.detalles||{}).slice(0,80))}</small></td>
-      </tr>`).join('')}</tbody>
-    </table>
-  `;
+  const tabla = document.getElementById('auditlog-tabla');
+  if (!tabla) return;
+  tabla.innerHTML = '<div class="loading"><div class="loading-spinner"></div>Cargando...</div>';
+  const { data, error } = await supa.from('audit_log').select('*')
+    .eq('empresa_id', currentEmpresa.id)
+    .order('created_at', { ascending: false }).limit(200);
+  if (error) { tabla.innerHTML = `<div class="empty-state">Error: ${esc(error.message)}</div>`; return; }
+  if (!data?.length) { tabla.innerHTML = '<div class="empty-state">Sin actividad registrada.</div>'; return; }
+  tabla.innerHTML = `<div style="overflow-x:auto;"><table>
+    <thead><tr><th>Fecha</th><th>Acción</th><th>Módulo</th><th>Detalle</th></tr></thead>
+    <tbody>${data.map(r=>`<tr>
+      <td style="font-size:12px;white-space:nowrap;">${new Date(r.created_at).toLocaleString('es-DO')}</td>
+      <td><span style="font-size:11px;padding:2px 8px;border-radius:20px;background:${r.accion==='crear'?'#dcfce7':r.accion==='eliminar'?'#fee2e2':'#fef3c7'};color:${r.accion==='crear'?'#166534':r.accion==='eliminar'?'#991b1b':'#92400e'};">${r.accion?.toUpperCase()}</span></td>
+      <td style="font-size:12px;">${esc(r.tabla||'')}</td>
+      <td style="font-size:12px;color:var(--muted);">${esc(JSON.stringify(r.datos_nuevos||r.datos||'').substring(0,100))}</td>
+    </tr>`).join('')}</tbody>
+  </table></div>`;
 };
 
 // ==================== RESPALDO Y EXPORT ====================
 pages.respaldo = () => `
-  <div class="page-header">
-    <div><h2>Respaldo y Datos</h2><p>Exportar o importar todos los datos de ${esc(currentEmpresa.nombre)}</p></div>
-  </div>
+  <div class="page-header"><div><h2>Respaldo y Datos</h2><p>Exportar o importar todos los datos de ${esc(currentEmpresa.nombre)}</p></div></div>
   <div class="card">
     <h3>⬇️ Exportar Datos</h3>
     <p class="text-muted" style="margin-bottom:10px;">Descarga TODOS los datos de esta empresa en formato JSON. Útil como respaldo o para migrar a otra cuenta.</p>
@@ -5277,142 +5516,79 @@ window.exportarRespaldoCloud = async () => {
   const btn = document.querySelector('button[onclick="exportarRespaldoCloud()"]');
   if (btn) { btn.disabled = true; btn.textContent = 'Descargando datos...'; }
 
-  const [cuentas, clientes, proveedores, productos, facturas, compras, asientos] = await Promise.all([
+  const [cuentas, clientes, proveedores, productos, facturas, compras, asientos, empleados, nominas] = await Promise.all([
     supa.from('cuentas').select('*').eq('empresa_id', currentEmpresa.id),
     supa.from('clientes').select('*').eq('empresa_id', currentEmpresa.id),
     supa.from('proveedores').select('*').eq('empresa_id', currentEmpresa.id),
     supa.from('productos').select('*').eq('empresa_id', currentEmpresa.id),
     supa.from('facturas').select('*').eq('empresa_id', currentEmpresa.id),
     supa.from('compras').select('*').eq('empresa_id', currentEmpresa.id),
-    supa.from('asientos').select('*').eq('empresa_id', currentEmpresa.id)
+    supa.from('asientos').select('*').eq('empresa_id', currentEmpresa.id),
+    supa.from('empleados').select('*').eq('empresa_id', currentEmpresa.id),
+    supa.from('nominas').select('*').eq('empresa_id', currentEmpresa.id),
   ]);
 
-  const respaldo = {
-    version: '1.0',
+  if (btn) { btn.disabled = false; btn.textContent = '📥 Descargar Respaldo Completo'; }
+
+  const backup = {
+    empresa: currentEmpresa,
     fecha_respaldo: new Date().toISOString(),
-    empresa: { nombre: currentEmpresa.nombre, rnc: currentEmpresa.rnc, telefono: currentEmpresa.telefono, direccion: currentEmpresa.direccion, email: currentEmpresa.email },
+    version: '2.0',
     cuentas: cuentas.data || [],
     clientes: clientes.data || [],
     proveedores: proveedores.data || [],
     productos: productos.data || [],
     facturas: facturas.data || [],
     compras: compras.data || [],
-    asientos: asientos.data || []
+    asientos: asientos.data || [],
+    empleados: empleados.data || [],
+    nominas: nominas.data || [],
   };
 
-  const blob = new Blob([JSON.stringify(respaldo, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  const rnc = (currentEmpresa.rnc || '').replace(/[^0-9]/g,'') || 'empresa';
-  a.href = url; a.download = `DSA-Cloud-Respaldo-${rnc}-${todayDate()}.json`;
-  a.click(); URL.revokeObjectURL(url);
-
-  if (btn) { btn.disabled = false; btn.textContent = '📥 Descargar Respaldo Completo'; }
-  alert('✓ Respaldo descargado correctamente.');
+  const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url;
+  a.download = `respaldo_${currentEmpresa.nombre.replace(/\s+/g,'_')}_${new Date().toISOString().split('T')[0]}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
 };
 
-window.importarRespaldoCloud = () => {
-  const file = document.getElementById('restore-file').files[0];
-  if (!file) { alert('Selecciona un archivo JSON.'); return; }
-  if (!confirm(`⚠️ ATENCIÓN: Esto REEMPLAZARÁ todos los datos actuales de "${currentEmpresa.nombre}".\n\n¿Continuar?`)) return;
-  if (!confirm('Última confirmación: la acción es IRREVERSIBLE. ¿Restaurar?')) return;
+window.importarRespaldoCloud = async () => {
+  const file = document.getElementById('restore-file')?.files?.[0];
+  if (!file) { alert('Selecciona un archivo JSON primero.'); return; }
+  if (!confirm('⚠️ Esto REEMPLAZARÁ todos los datos actuales. ¿Continuar?')) return;
 
-  const reader = new FileReader();
-  reader.onload = async (e) => {
-    try {
-      const data = JSON.parse(e.target.result);
-      const eid = currentEmpresa.id;
-      await Promise.all([
-        supa.from('asientos').delete().eq('empresa_id', eid),
-        supa.from('compras').delete().eq('empresa_id', eid),
-        supa.from('facturas').delete().eq('empresa_id', eid),
-        supa.from('productos').delete().eq('empresa_id', eid),
-        supa.from('proveedores').delete().eq('empresa_id', eid),
-        supa.from('clientes').delete().eq('empresa_id', eid),
-        supa.from('cuentas').delete().eq('empresa_id', eid)
-      ]);
-      const insertBatch = async (tabla, lista) => {
-        if (!lista || lista.length === 0) return;
-        const limpios = lista.map(r => { const x = {...r, empresa_id: eid}; delete x.id; return x; });
-        for (let i = 0; i < limpios.length; i += 50) {
-          await supa.from(tabla).insert(limpios.slice(i, i+50));
-        }
-      };
-      await insertBatch('cuentas', data.cuentas);
-      await insertBatch('clientes', data.clientes);
-      await insertBatch('proveedores', data.proveedores);
-      await insertBatch('productos', data.productos);
-      await insertBatch('facturas', data.facturas);
-      await insertBatch('compras', data.compras);
-      await insertBatch('asientos', data.asientos);
-      alert(`✓ Restauración completada.\n\nCuentas: ${data.cuentas?.length||0}\nClientes: ${data.clientes?.length||0}\nProveedores: ${data.proveedores?.length||0}\nFacturas: ${data.facturas?.length||0}\nCompras: ${data.compras?.length||0}\nAsientos: ${data.asientos?.length||0}`);
-      cuentasData = []; asientosData = [];
-      navigate('dashboard');
-    } catch (err) {
-      alert('Error al restaurar: ' + err.message);
-    }
-  };
-  reader.readAsText(file);
-};
-
-const placeholderPages = [];
-const navTitles = {
-  cuentas: 'Plan de Cuentas', asientos: 'Asientos Contables', diario: 'Libro Diario', mayor: 'Libro Mayor',
-  clientes: 'Clientes', proveedores: 'Proveedores', productos: 'Productos', facturas: 'Facturación',
-  compras: 'Compras (606)', formato606: 'Formato 606 DGII', balanza: 'Balanza de Comprobación',
-  balance: 'Balance General', resultados: 'Estado de Resultados', usuarios: 'Usuarios y Permisos',
-  config: 'Configuración de Empresa'
-};
-
-// ---------- REENVÍO DE EMAIL CON CUENTA REGRESIVA ----------
-window.reenviarEmailInvitacion = async (email) => {
-  const btn = document.getElementById('btn-reenviar');
-  if (btn) { btn.disabled = true; btn.textContent = 'Enviando...'; }
   try {
-    const redirectUrl = window.location.origin + window.location.pathname;
-    const { error } = await supa.auth.signInWithOtp({
-      email: email,
-      options: { shouldCreateUser: true, emailRedirectTo: redirectUrl }
-    });
-    if (error) {
-      const rl = error.message.match(/after (\d+) seconds/i);
-      if (rl) {
-        iniciarCuentaRegresiva(parseInt(rl[1]));
-        if (btn) btn.textContent = `⏱ Aún ${rl[1]}s`;
-        alert(`Aún debes esperar ${rl[1]} segundos. Mientras tanto, puedes copiar el link y compartirlo.`);
-      } else {
-        alert('Error: ' + error.message);
-        if (btn) { btn.disabled = false; btn.textContent = '📧 Reenviar email'; }
+    const text = await file.text();
+    const data = JSON.parse(text);
+
+    const insertBatch = async (tabla, rows) => {
+      if (!rows?.length) return;
+      const limpios = rows.map(r => { const {id,...rest}=r; return {...rest, empresa_id: currentEmpresa.id}; });
+      for (let i = 0; i < limpios.length; i += 50) {
+        await supa.from(tabla).insert(limpios.slice(i, i+50));
       }
-    } else {
-      if (btn) { btn.disabled = true; btn.textContent = '✓ Email enviado'; btn.classList.remove('btn-primary'); btn.classList.add('btn-success'); }
-      alert(`✓ Email enviado a ${email}. Revisa la bandeja de entrada (y Spam).`);
-    }
-  } catch (e) {
-    alert('Error: ' + e.message);
-    if (btn) { btn.disabled = false; btn.textContent = '📧 Reenviar email'; }
+    };
+
+    await insertBatch('cuentas',    data.cuentas);
+    await insertBatch('clientes',   data.clientes);
+    await insertBatch('proveedores',data.proveedores);
+    await insertBatch('productos',  data.productos);
+    await insertBatch('facturas',   data.facturas);
+    await insertBatch('compras',    data.compras);
+    await insertBatch('asientos',   data.asientos);
+
+    alert('✅ Datos restaurados correctamente.');
+  } catch(err) {
+    alert('Error al importar: ' + err.message);
   }
 };
 
-window.iniciarCuentaRegresiva = (segundos) => {
-  const btn = document.getElementById('btn-reenviar');
-  const cuenta = document.getElementById('cuenta-reg');
-  let restantes = segundos;
-  const tick = setInterval(() => {
-    restantes--;
-    if (cuenta) cuenta.textContent = restantes;
-    if (btn) btn.textContent = `⏱ Esperando ${restantes}s`;
-    if (restantes <= 0) {
-      clearInterval(tick);
-      if (btn) { btn.disabled = false; btn.textContent = '📧 Reenviar email'; }
-    }
-  }, 1000);
-};
-
-// Auto-iniciar cuenta regresiva si el modal está visible
+// ── Iniciar cuenta regresiva si el modal está visible
 const _origMostrarModal = window.mostrarModalInvitacionEnviada;
 window.mostrarModalInvitacionEnviada = (email, url, emailOk, emailErr, rateLimitSeg = 0) => {
-  _origMostrarModal(email, url, emailOk, emailErr, rateLimitSeg);
+  if (typeof _origMostrarModal === 'function') _origMostrarModal(email, url, emailOk, emailErr, rateLimitSeg);
   if (rateLimitSeg > 0) {
     setTimeout(() => iniciarCuentaRegresiva(rateLimitSeg), 100);
   }
