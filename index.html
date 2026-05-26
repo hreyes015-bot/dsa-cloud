@@ -4930,7 +4930,8 @@ window.generarTablaNomina = async () => {
         </tfoot>
       </table></div>
       <div style="margin-top:20px;display:flex;justify-content:flex-end;gap:12px;">
-        <button class="btn btn-secondary" onclick="exportarNominaExcel()">📊 Exportar Excel</button>
+        <button class="btn btn-secondary" onclick="exportarNominaExcel()">📊 Excel</button>
+        <button class="btn btn-secondary" onclick="exportarNominaPDF(${mes},${anio},${quincena})">📄 PDF</button>
         <button class="btn btn-primary" onclick="guardarNomina(${mes},${anio},${quincena})" style="font-size:15px;padding:10px 28px;">💾 Guardar Nómina</button>
       </div>
     </div>`;
@@ -5097,6 +5098,7 @@ window.renderHistorialNominas = async () => {
         <td>
           <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;" onclick="verDetalleNomina('${n.id}')">👁️ Ver</button>
           <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;" onclick="exportarNominaExcelHistorial('${n.id}')">📊</button>
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;" onclick="exportarNominaPDFHistorial('${n.id}')">📄</button>
         </td>
       </tr>`).join('')}
     </tbody>
@@ -5217,6 +5219,107 @@ window.exportarNominaExcelHistorial = async (nominaId) => {
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filas), `Nómina ${titulo}`);
   XLSX.writeFile(wb, `Nomina_${titulo}.xlsx`);
 };
+
+// ── PDF desde tabla activa (procesar nómina) ──
+window.exportarNominaPDF = (mes, anio, quincena) => {
+  const mesesN = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  const titulo = `${quincena===1?'1ra':'2da'} Quincena — ${mesesN[mes-1]} ${anio}`;
+  const filas = [];
+  let totDev=0, totDed=0, totNeto=0, totTss=0;
+
+  document.querySelectorAll('#tbl-nomina-proceso tbody tr').forEach(tr => {
+    const nombre  = tr.querySelector('td:first-child strong')?.textContent || '';
+    const salario = parseFloat(tr.dataset.salario||0);
+    const he      = parseFloat(tr.querySelector('[data-nom="he"]')?.value||0);
+    const df      = parseFloat(tr.querySelector('[data-nom="df"]')?.value||0);
+    const oi      = parseFloat(tr.querySelector('[data-nom="oi"]')?.value||0);
+    const prest   = parseFloat(tr.querySelector('[data-nom="prest"]')?.value||0);
+    const odesc   = parseFloat(tr.querySelector('[data-nom="odesc"]')?.value||0);
+    const c = calcNominaEmpleado(salario, he, df, oi, prest, odesc);
+    totDev  += c.total_devengado;
+    totDed  += c.total_deducciones;
+    totNeto += c.neto_pagar;
+    totTss  += c.total_tss_patronal;
+    filas.push([nombre, fmtNum(c.salario_quincena), fmtNum(c.total_devengado),
+      fmtNum(c.afp_empleado+c.sfs_empleado+c.isr+prest+odesc), fmtNum(c.neto_pagar), fmtNum(c.total_tss_patronal)]);
+  });
+  _generarNominaPDF(titulo, filas, totDev, totDed, totNeto, totTss, `Nomina_Q${quincena}_${mesesN[mes-1]}_${anio}.pdf`);
+};
+
+// ── PDF desde historial ──
+window.exportarNominaPDFHistorial = async (nominaId) => {
+  const { data, error } = await supa.from('nomina_detalle')
+    .select('*').eq('nomina_id', nominaId).order('nombre_empleado');
+  if (error || !data?.length) { alert('No se pudo exportar.'); return; }
+  const nom = nominasData.find(n=>n.id===nominaId);
+  const mesesN = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  const titulo = `${nom?.quincena===1?'1ra':'2da'} Quincena — ${mesesN[(nom?.mes||1)-1]} ${nom?.anio}`;
+  const filas = data.map(d => [
+    d.nombre_empleado,
+    fmtNum(d.salario_quincena),
+    fmtNum(d.total_devengado),
+    fmtNum(d.total_deducciones),
+    fmtNum(d.neto_pagar),
+    fmtNum(d.total_tss_patronal)
+  ]);
+  _generarNominaPDF(titulo, filas, nom?.total_devengado||0, nom?.total_deducciones||0, nom?.total_neto||0, nom?.total_tss_patronal||0,
+    `Nomina_Q${nom?.quincena}_${mesesN[(nom?.mes||1)-1]}_${nom?.anio}.pdf`);
+};
+
+// ── Generador PDF común ──
+function _generarNominaPDF(titulo, filas, totDev, totDed, totNeto, totTss, filename) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', format: 'a4' });
+
+  // Encabezado
+  doc.setFillColor(26, 36, 51);
+  doc.rect(0, 0, 297, 22, 'F');
+  doc.setTextColor(255,255,255);
+  doc.setFontSize(14); doc.setFont(undefined,'bold');
+  doc.text(currentEmpresa.nombre, 14, 10);
+  doc.setFontSize(10); doc.setFont(undefined,'normal');
+  doc.text(`Nómina — ${titulo}`, 14, 17);
+  doc.text(`Fecha: ${new Date().toLocaleDateString('es-DO')}`, 220, 17);
+
+  // Tabla principal
+  doc.autoTable({
+    startY: 26,
+    head: [['Empleado','Salario Quinc.','Total Devengado','Deducciones','NETO A PAGAR','TSS Patronal']],
+    body: filas,
+    foot: [['TOTALES', '', fmtNum(totDev), fmtNum(totDed), fmtNum(totNeto), fmtNum(totTss)]],
+    headStyles: { fillColor: [11,79,108], textColor:255, fontStyle:'bold', fontSize:9 },
+    footStyles: { fillColor: [26,36,51], textColor:255, fontStyle:'bold', fontSize:9 },
+    bodyStyles: { fontSize: 9 },
+    columnStyles: {
+      0: { cellWidth: 60 },
+      1: { halign:'right' }, 2: { halign:'right' },
+      3: { halign:'right', textColor:[220,38,38] },
+      4: { halign:'right', fontStyle:'bold', textColor:[22,101,52] },
+      5: { halign:'right', textColor:[124,58,237] }
+    },
+    alternateRowStyles: { fillColor: [248,250,252] },
+    margin: { left:14, right:14 }
+  });
+
+  // Resumen TSS
+  const y = doc.lastAutoTable.finalY + 10;
+  doc.setFillColor(248,250,252);
+  doc.rect(14, y, 269, 28, 'F');
+  doc.setDrawColor(226,232,240);
+  doc.rect(14, y, 269, 28, 'S');
+  doc.setTextColor(30,41,59); doc.setFontSize(9); doc.setFont(undefined,'bold');
+  doc.text('RESUMEN TSS', 18, y+7);
+  doc.setFont(undefined,'normal');
+  doc.text(`Total Devengado:  RD$ ${fmtNum(totDev)}`, 18, y+14);
+  doc.text(`Total Deducciones: RD$ ${fmtNum(totDed)}`, 18, y+20);
+  doc.setFont(undefined,'bold');
+  doc.setTextColor(22,101,52);
+  doc.text(`NETO TOTAL A PAGAR: RD$ ${fmtNum(totNeto)}`, 100, y+14);
+  doc.setTextColor(124,58,237);
+  doc.text(`TSS PATRONAL TOTAL: RD$ ${fmtNum(totTss)}`, 100, y+20);
+
+  doc.save(filename);
+}
 
 // ==================== CONFIGURACIÓN ====================
 pages.config = () => `
@@ -5501,7 +5604,7 @@ pages.respaldo = () => `
   <div class="page-header"><div><h2>Respaldo y Datos</h2><p>Exportar o importar todos los datos de ${esc(currentEmpresa.nombre)}</p></div></div>
   <div class="card">
     <h3>⬇️ Exportar Datos</h3>
-    <p class="text-muted" style="margin-bottom:10px;">Descarga TODOS los datos de esta empresa en formato JSON. Útil como respaldo o para migrar a otra cuenta.</p>
+    <p <p class="text-muted" style="margin-bottom:10px;">Descarga TODOS los datos de esta empresa en formato JSON.</p>
     <button class="btn btn-primary" onclick="exportarRespaldoCloud()">📥 Descargar Respaldo Completo</button>
   </div>
   <div class="card">
@@ -5514,8 +5617,7 @@ pages.respaldo = () => `
 
 window.exportarRespaldoCloud = async () => {
   const btn = document.querySelector('button[onclick="exportarRespaldoCloud()"]');
-  if (btn) { btn.disabled = true; btn.textContent = 'Descargando datos...'; }
-
+  if (btn) { btn.disabled = true; btn.textContent = 'Descargando...'; }
   const [cuentas, clientes, proveedores, productos, facturas, compras, asientos, empleados, nominas] = await Promise.all([
     supa.from('cuentas').select('*').eq('empresa_id', currentEmpresa.id),
     supa.from('clientes').select('*').eq('empresa_id', currentEmpresa.id),
@@ -5527,103 +5629,52 @@ window.exportarRespaldoCloud = async () => {
     supa.from('empleados').select('*').eq('empresa_id', currentEmpresa.id),
     supa.from('nominas').select('*').eq('empresa_id', currentEmpresa.id),
   ]);
-
   if (btn) { btn.disabled = false; btn.textContent = '📥 Descargar Respaldo Completo'; }
-
   const backup = {
-    empresa: currentEmpresa,
-    fecha_respaldo: new Date().toISOString(),
-    version: '2.0',
-    cuentas: cuentas.data || [],
-    clientes: clientes.data || [],
-    proveedores: proveedores.data || [],
-    productos: productos.data || [],
-    facturas: facturas.data || [],
-    compras: compras.data || [],
-    asientos: asientos.data || [],
-    empleados: empleados.data || [],
-    nominas: nominas.data || [],
+    empresa: currentEmpresa, fecha_respaldo: new Date().toISOString(), version: '2.0',
+    cuentas: cuentas.data||[], clientes: clientes.data||[], proveedores: proveedores.data||[],
+    productos: productos.data||[], facturas: facturas.data||[], compras: compras.data||[],
+    asientos: asientos.data||[], empleados: empleados.data||[], nominas: nominas.data||[],
   };
-
-  const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
-  a.href = url;
-  a.download = `respaldo_${currentEmpresa.nombre.replace(/\s+/g,'_')}_${new Date().toISOString().split('T')[0]}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
+  const blob = new Blob([JSON.stringify(backup,null,2)],{type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href=url; a.download=`respaldo_${currentEmpresa.nombre.replace(/\s+/g,'_')}_${new Date().toISOString().split('T')[0]}.json`;
+  a.click(); URL.revokeObjectURL(url);
 };
 
 window.importarRespaldoCloud = async () => {
   const file = document.getElementById('restore-file')?.files?.[0];
   if (!file) { alert('Selecciona un archivo JSON primero.'); return; }
   if (!confirm('⚠️ Esto REEMPLAZARÁ todos los datos actuales. ¿Continuar?')) return;
-
   try {
     const text = await file.text();
     const data = JSON.parse(text);
-
     const insertBatch = async (tabla, rows) => {
       if (!rows?.length) return;
       const limpios = rows.map(r => { const {id,...rest}=r; return {...rest, empresa_id: currentEmpresa.id}; });
-      for (let i = 0; i < limpios.length; i += 50) {
-        await supa.from(tabla).insert(limpios.slice(i, i+50));
-      }
+      for (let i=0;i<limpios.length;i+=50) await supa.from(tabla).insert(limpios.slice(i,i+50));
     };
-
-    await insertBatch('cuentas',    data.cuentas);
-    await insertBatch('clientes',   data.clientes);
-    await insertBatch('proveedores',data.proveedores);
-    await insertBatch('productos',  data.productos);
-    await insertBatch('facturas',   data.facturas);
-    await insertBatch('compras',    data.compras);
-    await insertBatch('asientos',   data.asientos);
-
+    await insertBatch('cuentas',data.cuentas); await insertBatch('clientes',data.clientes);
+    await insertBatch('proveedores',data.proveedores); await insertBatch('productos',data.productos);
+    await insertBatch('facturas',data.facturas); await insertBatch('compras',data.compras);
+    await insertBatch('asientos',data.asientos);
     alert('✅ Datos restaurados correctamente.');
-  } catch(err) {
-    alert('Error al importar: ' + err.message);
-  }
-};
-
-// ── Iniciar cuenta regresiva si el modal está visible
-const _origMostrarModal = window.mostrarModalInvitacionEnviada;
-window.mostrarModalInvitacionEnviada = (email, url, emailOk, emailErr, rateLimitSeg = 0) => {
-  if (typeof _origMostrarModal === 'function') _origMostrarModal(email, url, emailOk, emailErr, rateLimitSeg);
-  if (rateLimitSeg > 0) {
-    setTimeout(() => iniciarCuentaRegresiva(rateLimitSeg), 100);
-  }
+  } catch(err) { alert('Error al importar: ' + err.message); }
 };
 
 // ---------- INICIALIZACIÓN ----------
 async function init() {
   try {
     const { data, error } = await supa.auth.getSession();
-    if (error) {
-      console.error('Error obteniendo sesión:', error);
-      showMessage('Error de conexión: ' + error.message, 'error');
-      showAuthScreen();
-      return;
-    }
-    if (data.session) {
-      session = data.session;
-      showEmpresaScreen();
-    } else {
-      showAuthScreen();
-    }
-  } catch(e) {
-    console.error('Error en init:', e);
-    showAuthScreen();
-  }
+    if (error) { showMessage('Error de conexión: ' + error.message, 'error'); showAuthScreen(); return; }
+    if (data.session) { session = data.session; showEmpresaScreen(); } else { showAuthScreen(); }
+  } catch(e) { showAuthScreen(); }
 }
 
 supa.auth.onAuthStateChange((event, newSession) => {
-  if (event === 'SIGNED_OUT') {
-    session = null;
-    currentEmpresa = null;
-    showAuthScreen();
-  } else if (event === 'SIGNED_IN' && newSession) {
-    session = newSession;
-  }
+  if (event === 'SIGNED_OUT') { session = null; currentEmpresa = null; showAuthScreen(); }
+  else if (event === 'SIGNED_IN' && newSession) { session = newSession; }
 });
 
 init();
