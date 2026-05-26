@@ -5432,4 +5432,25 @@ async function init() {
       session = data.session;
       showEmpresaScreen();
     } else {
-      showAuthScreen()
+      showAuthScreen();
+    }
+  } catch(e) {
+    console.error('Error en init:', e);
+    showAuthScreen();
+  }
+}
+
+supa.auth.onAuthStateChange((event, newSession) => {
+  if (event === 'SIGNED_OUT') {
+    session = null;
+    currentEmpresa = null;
+    showAuthScreen();
+  } else if (event === 'SIGNED_IN' && newSession) {
+    session = newSession;
+  }
+});
+
+init();
+</script>
+</body>
+</html>
