@@ -5420,79 +5420,6 @@ function _generarNominaPDF(titulo, filas, totales, filename) {
     margin: { left:marginL, right:marginR }
   });
 
-  // ── Resumen completo: Devengado → Deducciones → Neto ──
-  const y   = doc.lastAutoTable.finalY + 10;
-  const bW  = 150;
-  const bX  = (pageW - bW) / 2;
-  const lH  = 8;
-  const lX  = bX + 5;
-  const vX  = bX + bW - 5;
-  // 4 ingresos + separador + devengado + 5 deducciones + separador + neto = ~14 filas
-  const bH  = lH * 14 + 18;
-
-  doc.setFillColor(248,250,252);
-  doc.rect(bX, y, bW, bH, 'F');
-  doc.setDrawColor(203,213,225); doc.setLineWidth(0.2);
-  doc.rect(bX, y, bW, bH, 'S');
-
-  let ry = y + 8;
-
-  // — Ingresos —
-  doc.setFontSize(7.5); doc.setFont(undefined,'bold'); doc.setTextColor(11,79,108);
-  doc.text('INGRESOS', lX, ry); ry += lH;
-
-  doc.setFont(undefined,'normal'); doc.setTextColor(30,41,59);
-  const ingRows = [
-    ['Salario Quincena:', totSalQ],
-    ['(+) Horas Extras:', totHE],
-    ['(+) Días Festivos:', totDF],
-    ['(+) Otros Ingresos/Comisiones:', totOI],
-  ];
-  for (const [lbl, val] of ingRows) {
-    doc.text(lbl, lX, ry);
-    doc.text('RD$ ' + fmtNum(val), vX, ry, { align:'right' });
-    ry += lH;
-  }
-  // Línea y Total Devengado
-  doc.setDrawColor(11,79,108); doc.setLineWidth(0.3);
-  doc.line(lX, ry-2, vX, ry-2);
-  doc.setFont(undefined,'bold'); doc.setTextColor(11,79,108);
-  doc.text('Total Devengado:', lX, ry+2);
-  doc.text('RD$ ' + fmtNum(totDev), vX, ry+2, { align:'right' });
-  ry += lH + 4;
-
-  // — Deducciones —
-  doc.setFont(undefined,'bold'); doc.setTextColor(220,38,38);
-  doc.text('DEDUCCIONES', lX, ry); ry += lH;
-  doc.setFont(undefined,'normal');
-  const dedRows = [
-    ['(-) AFP Empleado:', totAfp],
-    ['(-) SFS Empleado:', totSfs],
-    ['(-) ISR:', totIsr],
-    ['(-) Préstamos:', totPrest],
-    ['(-) Otros Descuentos:', totOdesc],
-  ];
-  for (const [lbl, val] of dedRows) {
-    doc.text(lbl, lX, ry);
-    doc.text('RD$ ' + fmtNum(val), vX, ry, { align:'right' });
-    ry += lH;
-  }
-
-  // Doble línea y Neto
-  doc.setDrawColor(26,36,51); doc.setLineWidth(0.5);
-  doc.line(lX, ry-1, vX, ry-1);
-  doc.setLineWidth(0.2);
-  doc.line(lX, ry+1, vX, ry+1);
-  ry += lH;
-  doc.setFontSize(9); doc.setFont(undefined,'bold'); doc.setTextColor(22,101,52);
-  doc.text('NETO TOTAL A PAGAR:', lX, ry);
-  doc.text('RD$ ' + fmtNum(totNeto), vX, ry, { align:'right' });
-
-  // TSS Patronal fuera del box
-  doc.setFontSize(7.5); doc.setFont(undefined,'normal'); doc.setTextColor(124,58,237);
-  doc.text('TSS Patronal Total (cargo empresa):  RD$ ' + fmtNum(totTss),
-    pageW/2, y + bH + 8, { align:'center' });
-
   doc.save(filename);
 }
 
@@ -5969,4 +5896,4 @@ supa.auth.onAuthStateChange((event, newSession) => {
 init();
 </script>
 </body>
-</html>
+</html>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
