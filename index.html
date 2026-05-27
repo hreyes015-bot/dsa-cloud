@@ -4947,7 +4947,8 @@ window.generarTablaNomina = async () => {
       </table></div>
       <div style="margin-top:20px;display:flex;justify-content:flex-end;gap:12px;">
         <button class="btn btn-secondary" onclick="exportarNominaExcel()">📊 Excel</button>
-        <button class="btn btn-secondary" onclick="exportarNominaPDF(${mes},${anio},${quincena})">📄 PDF</button>
+        <button class="btn btn-secondary" onclick="exportarNominaPDF(${mes},${anio},${quincena},'empresa')">📄 PDF Empresa</button>
+        <button class="btn btn-secondary" onclick="exportarNominaPDF(${mes},${anio},${quincena},'volantes')">👤 Volantes</button>
         <button class="btn btn-primary" onclick="guardarNomina(${mes},${anio},${quincena})" style="font-size:15px;padding:10px 28px;">💾 Guardar Nómina</button>
       </div>
     </div>`;
@@ -5249,15 +5250,17 @@ window.exportarNominaExcelHistorial = async (nominaId) => {
 };
 
 // ── PDF desde tabla activa (procesar nómina) ──
-window.exportarNominaPDF = (mes, anio, quincena) => {
+window.exportarNominaPDF = (mes, anio, quincena, tipo = 'empresa') => {
   const mesesN = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
   const titulo = `${quincena===1?'1ra':'2da'} Quincena — ${mesesN[mes-1]} ${anio}`;
-  const filas = [];
+  const filas = [], datosEmp = [];
   let totDev=0, totDed=0, totNeto=0, totTss=0;
   let totAfp=0, totSfs=0, totIsr=0, totPrest=0, totOdesc=0;
+  let totSalQ=0, totHE=0, totDF=0, totOI=0;
 
   document.querySelectorAll('#tbl-nomina-proceso tbody tr').forEach(tr => {
     const nombre  = tr.querySelector('td:first-child strong')?.textContent || '';
+    const cargo   = tr.querySelector('td:first-child div')?.textContent || '';
     const salario = parseFloat(tr.dataset.salario||0);
     const he      = parseFloat(tr.querySelector('[data-nom="he"]')?.value||0);
     const df      = parseFloat(tr.querySelector('[data-nom="df"]')?.value||0);
@@ -5267,18 +5270,19 @@ window.exportarNominaPDF = (mes, anio, quincena) => {
     const odesc   = parseFloat(tr.querySelector('[data-nom="odesc"]')?.value||0);
     const baseTSS = document.querySelector('input[name="tss-base"]:checked')?.value || 'devengado';
     const c = calcNominaEmpleado(salario, he, df, oi, prest, odesc, isr, baseTSS);
-    totDev   += c.total_devengado;
-    totDed   += c.total_deducciones;
-    totNeto  += c.neto_pagar;
-    totTss   += c.total_tss_patronal;
-    totAfp   += c.afp_empleado;
-    totSfs   += c.sfs_empleado;
-    totIsr   += c.isr;
-    totPrest += prest;
-    totOdesc += odesc;
+    totDev   += c.total_devengado;  totDed   += c.total_deducciones;
+    totNeto  += c.neto_pagar;       totTss   += c.total_tss_patronal;
+    totAfp   += c.afp_empleado;     totSfs   += c.sfs_empleado;
+    totIsr   += c.isr;              totPrest += prest;  totOdesc += odesc;
+    totSalQ  += c.salario_quincena; totHE    += c.monto_horas_extras;
+    totDF    += c.monto_dias_fiestas; totOI  += c.otros_ingresos;
+    // Filas para PDF empresa (13 columnas)
     filas.push([
       nombre,
       fmtNum(c.salario_quincena),
+      fmtNum(c.monto_horas_extras),
+      fmtNum(c.monto_dias_fiestas),
+      fmtNum(c.otros_ingresos),
       fmtNum(c.total_devengado),
       fmtNum(c.afp_empleado),
       fmtNum(c.sfs_empleado),
@@ -5288,9 +5292,21 @@ window.exportarNominaPDF = (mes, anio, quincena) => {
       fmtNum(c.neto_pagar),
       fmtNum(c.total_tss_patronal)
     ]);
+    // Datos raw para volantes
+    datosEmp.push({ nombre, cargo,
+      salario_quincena: c.salario_quincena, monto_horas_extras: c.monto_horas_extras,
+      monto_dias_fiestas: c.monto_dias_fiestas, otros_ingresos: c.otros_ingresos,
+      total_devengado: c.total_devengado, afp_empleado: c.afp_empleado,
+      sfs_empleado: c.sfs_empleado, isr: c.isr, prestamos: prest,
+      otros_descuentos: odesc, total_deducciones: c.total_deducciones, neto_pagar: c.neto_pagar
+    });
   });
-  const totales = { totDev, totDed, totNeto, totTss, totAfp, totSfs, totIsr, totPrest, totOdesc };
-  _generarNominaPDF(titulo, filas, totales, `Nomina_Q${quincena}_${mesesN[mes-1]}_${anio}.pdf`);
+  const totales = { totDev, totDed, totNeto, totTss, totAfp, totSfs, totIsr, totPrest, totOdesc, totSalQ, totHE, totDF, totOI };
+  if (tipo === 'volantes') {
+    _generarVolantesPDF(titulo, datosEmp, `Volantes_Q${quincena}_${mesesN[mes-1]}_${anio}.pdf`);
+  } else {
+    _generarNominaPDF(titulo, filas, totales, `Nomina_Q${quincena}_${mesesN[mes-1]}_${anio}.pdf`);
+  }
 };
 
 // ── PDF desde historial ──
@@ -5301,164 +5317,294 @@ window.exportarNominaPDFHistorial = async (nominaId) => {
   const nom = nominasData.find(n=>n.id===nominaId);
   const mesesN = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
   const titulo = `${nom?.quincena===1?'1ra':'2da'} Quincena — ${mesesN[(nom?.mes||1)-1]} ${nom?.anio}`;
-  let totAfp=0, totSfs=0, totIsr=0, totPrest=0, totOdesc=0;
+  let totAfp=0, totSfs=0, totIsr=0, totPrest=0, totOdesc=0, totSalQ=0, totHE=0, totDF=0, totOI=0;
   const filas = data.map(d => {
-    totAfp   += d.afp_empleado||0;
-    totSfs   += d.sfs_empleado||0;
-    totIsr   += d.isr||0;
-    totPrest += d.prestamos||0;
-    totOdesc += d.otros_descuentos||0;
+    totAfp += d.afp_empleado||0; totSfs += d.sfs_empleado||0; totIsr += d.isr||0;
+    totPrest += d.prestamos||0;  totOdesc += d.otros_descuentos||0;
+    totSalQ += d.salario_quincena||0; totHE += d.monto_horas_extras||0;
+    totDF   += d.monto_dias_fiestas||0; totOI += d.otros_ingresos||0;
     return [
       d.nombre_empleado,
-      fmtNum(d.salario_quincena),
-      fmtNum(d.total_devengado),
+      fmtNum(d.salario_quincena||0),
+      fmtNum(d.monto_horas_extras||0),
+      fmtNum(d.monto_dias_fiestas||0),
+      fmtNum(d.otros_ingresos||0),
+      fmtNum(d.total_devengado||0),
       fmtNum(d.afp_empleado||0),
       fmtNum(d.sfs_empleado||0),
       fmtNum(d.isr||0),
       fmtNum(d.prestamos||0),
       fmtNum(d.otros_descuentos||0),
-      fmtNum(d.neto_pagar),
-      fmtNum(d.total_tss_patronal)
+      fmtNum(d.neto_pagar||0),
+      fmtNum(d.total_tss_patronal||0)
     ];
   });
   const totales = {
     totDev: nom?.total_devengado||0, totDed: nom?.total_deducciones||0,
     totNeto: nom?.total_neto||0,     totTss: nom?.total_tss_patronal||0,
-    totAfp, totSfs, totIsr, totPrest, totOdesc
+    totAfp, totSfs, totIsr, totPrest, totOdesc, totSalQ, totHE, totDF, totOI
   };
   _generarNominaPDF(titulo, filas, totales,
     `Nomina_Q${nom?.quincena}_${mesesN[(nom?.mes||1)-1]}_${nom?.anio}.pdf`);
 };
 
-// ── Generador PDF común ──
+// ── Generador PDF Empresa (Nómina completa) ──
 function _generarNominaPDF(titulo, filas, totales, filename) {
-  const { totDev, totDed, totNeto, totTss, totAfp, totSfs, totIsr, totPrest, totOdesc } = totales;
+  const { totDev, totDed, totNeto, totTss, totAfp, totSfs, totIsr, totPrest, totOdesc,
+          totSalQ=0, totHE=0, totDF=0, totOI=0 } = totales;
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: 'landscape', format: 'a4' });
   const pageW = 297;
-  const marginL = 10, marginR = 10;
+  const marginL = 8, marginR = 8;
 
   // ── Encabezado ──
   doc.setFillColor(26, 36, 51);
-  doc.rect(0, 0, pageW, 24, 'F');
+  doc.rect(0, 0, pageW, 26, 'F');
   doc.setTextColor(255,255,255);
   doc.setFontSize(13); doc.setFont(undefined,'bold');
-  doc.text(currentEmpresa.nombre, pageW/2, 10, { align:'center' });
+  doc.text(currentEmpresa.nombre, pageW/2, 11, { align:'center' });
   doc.setFontSize(9); doc.setFont(undefined,'normal');
-  doc.text(`Nómina — ${titulo}`, pageW/2, 17, { align:'center' });
-  doc.setFontSize(8);
-  doc.text(`Fecha: ${new Date().toLocaleDateString('es-DO')}`, pageW - marginR, 20, { align:'right' });
+  doc.text(`Nómina — ${titulo}`, pageW/2, 18, { align:'center' });
+  doc.setFontSize(7.5);
+  doc.text(`Fecha: ${new Date().toLocaleDateString('es-DO')}`, pageW - marginR, 23, { align:'right' });
 
-  // ── Tabla principal: columnas individuales de deducciones ──
+  // ── Tabla principal — 13 columnas nombres completos ──
   doc.autoTable({
-    startY: 28,
+    startY: 30,
     head: [[
       'Empleado',
-      'Sal. Quinc.',
-      'Total Dev.',
-      'AFP Emp.',
-      'SFS Emp.',
+      'Salario Quincena',
+      'Horas Extras',
+      'Días Festivos',
+      'Otros Ingresos',
+      'Total Devengado',
+      'AFP Empleado',
+      'SFS Empleado',
       'ISR',
       'Préstamos',
-      'Otros Desc.',
+      'Otros Descuentos',
       'NETO A PAGAR',
       'TSS Patronal'
     ]],
     body: filas,
     foot: [[
-      'TOTALES',
-      '',
-      fmtNum(totDev),
-      fmtNum(totAfp),
-      fmtNum(totSfs),
-      fmtNum(totIsr),
-      fmtNum(totPrest),
-      fmtNum(totOdesc),
-      fmtNum(totNeto),
-      fmtNum(totTss)
+      'TOTALES', fmtNum(totSalQ), fmtNum(totHE), fmtNum(totDF), fmtNum(totOI),
+      fmtNum(totDev), fmtNum(totAfp), fmtNum(totSfs), fmtNum(totIsr),
+      fmtNum(totPrest), fmtNum(totOdesc), fmtNum(totNeto), fmtNum(totTss)
     ]],
     headStyles: {
-      fillColor: [11,79,108], textColor:255, fontStyle:'bold',
-      fontSize:8, halign:'center', valign:'middle'
+      fillColor:[11,79,108], textColor:255, fontStyle:'bold',
+      fontSize:7, halign:'center', valign:'middle'
     },
     footStyles: {
-      fillColor: [26,36,51], textColor:255, fontStyle:'bold',
-      fontSize:8, halign:'center'
+      fillColor:[26,36,51], textColor:255, fontStyle:'bold',
+      fontSize:7, halign:'right'
     },
-    bodyStyles: { fontSize: 8, halign:'center', valign:'middle' },
+    bodyStyles: { fontSize:7.5, valign:'middle' },
     columnStyles: {
-      0: { halign:'left',  cellWidth:48 },
-      1: { halign:'right', cellWidth:24 },
-      2: { halign:'right', cellWidth:24 },
-      3: { halign:'right', cellWidth:22, textColor:[220,38,38] },
-      4: { halign:'right', cellWidth:22, textColor:[220,38,38] },
-      5: { halign:'right', cellWidth:20, textColor:[220,38,38] },
-      6: { halign:'right', cellWidth:22, textColor:[220,38,38] },
-      7: { halign:'right', cellWidth:22, textColor:[220,38,38] },
-      8: { halign:'right', cellWidth:26, fontStyle:'bold', textColor:[22,101,52] },
-      9: { halign:'right', cellWidth:22, textColor:[124,58,237] }
+      0:  { halign:'center', cellWidth:40 },
+      1:  { halign:'right',  cellWidth:21 },
+      2:  { halign:'right',  cellWidth:18 },
+      3:  { halign:'right',  cellWidth:18 },
+      4:  { halign:'right',  cellWidth:18 },
+      5:  { halign:'right',  cellWidth:21, fontStyle:'bold' },
+      6:  { halign:'right',  cellWidth:18, textColor:[220,38,38] },
+      7:  { halign:'right',  cellWidth:18, textColor:[220,38,38] },
+      8:  { halign:'right',  cellWidth:14, textColor:[220,38,38] },
+      9:  { halign:'right',  cellWidth:18, textColor:[220,38,38] },
+      10: { halign:'right',  cellWidth:20, textColor:[220,38,38] },
+      11: { halign:'right',  cellWidth:22, fontStyle:'bold', textColor:[22,101,52] },
+      12: { halign:'right',  cellWidth:18, textColor:[124,58,237] }
     },
-    alternateRowStyles: { fillColor: [248,250,252] },
+    alternateRowStyles: { fillColor:[248,250,252] },
     margin: { left:marginL, right:marginR }
   });
 
-  // ── Resumen vertical: Devengado - Conceptos = Neto ──
-  const y = doc.lastAutoTable.finalY + 8;
-  const boxW = 130;
-  const boxX = (pageW - boxW) / 2;   // centrado en la página
-  const lineH = 8;
-  const lblX  = boxX + 4;
-  const valX  = boxX + boxW - 4;
-  let   ry    = y + 8;
-
-  // Calcular altura del box dinámicamente
-  const boxH = 8 + (lineH * 8) + 6 + 10;  // padding + 8 filas + línea + neto
+  // ── Resumen completo: Devengado → Deducciones → Neto ──
+  const y   = doc.lastAutoTable.finalY + 10;
+  const bW  = 150;
+  const bX  = (pageW - bW) / 2;
+  const lH  = 8;
+  const lX  = bX + 5;
+  const vX  = bX + bW - 5;
+  // 4 ingresos + separador + devengado + 5 deducciones + separador + neto = ~14 filas
+  const bH  = lH * 14 + 18;
 
   doc.setFillColor(248,250,252);
-  doc.rect(boxX, y, boxW, boxH, 'F');
-  doc.setDrawColor(203,213,225);
-  doc.rect(boxX, y, boxW, boxH, 'S');
+  doc.rect(bX, y, bW, bH, 'F');
+  doc.setDrawColor(203,213,225); doc.setLineWidth(0.2);
+  doc.rect(bX, y, bW, bH, 'S');
 
-  // ── Total Devengado (positivo) ──
-  doc.setFontSize(9); doc.setFont(undefined,'bold'); doc.setTextColor(30,41,59);
-  doc.text('Total Devengado', lblX, ry);
-  doc.text(`RD$ ${fmtNum(totDev)}`, valX, ry, { align:'right' });
-  ry += 3;
-  doc.setDrawColor(203,213,225);
-  doc.line(lblX, ry, valX, ry);
-  ry += lineH - 2;
+  let ry = y + 8;
 
-  // ── Deducciones individuales ──
-  const conceptos = [
-    ['(-) AFP Empleado',     totAfp  ],
-    ['(-) SFS Empleado',     totSfs  ],
-    ['(-) ISR',              totIsr  ],
-    ['(-) Préstamos',        totPrest],
-    ['(-) Otros Descuentos', totOdesc],
+  // — Ingresos —
+  doc.setFontSize(7.5); doc.setFont(undefined,'bold'); doc.setTextColor(11,79,108);
+  doc.text('INGRESOS', lX, ry); ry += lH;
+
+  doc.setFont(undefined,'normal'); doc.setTextColor(30,41,59);
+  const ingRows = [
+    ['Salario Quincena:', totSalQ],
+    ['(+) Horas Extras:', totHE],
+    ['(+) Días Festivos:', totDF],
+    ['(+) Otros Ingresos/Comisiones:', totOI],
   ];
-  doc.setFontSize(8); doc.setFont(undefined,'normal'); doc.setTextColor(220,38,38);
-  for (const [lbl, val] of conceptos) {
-    doc.text(lbl,                   lblX, ry);
-    doc.text(`RD$ ${fmtNum(val)}`,  valX, ry, { align:'right' });
-    ry += lineH;
+  for (const [lbl, val] of ingRows) {
+    doc.text(lbl, lX, ry);
+    doc.text('RD$ ' + fmtNum(val), vX, ry, { align:'right' });
+    ry += lH;
+  }
+  // Línea y Total Devengado
+  doc.setDrawColor(11,79,108); doc.setLineWidth(0.3);
+  doc.line(lX, ry-2, vX, ry-2);
+  doc.setFont(undefined,'bold'); doc.setTextColor(11,79,108);
+  doc.text('Total Devengado:', lX, ry+2);
+  doc.text('RD$ ' + fmtNum(totDev), vX, ry+2, { align:'right' });
+  ry += lH + 4;
+
+  // — Deducciones —
+  doc.setFont(undefined,'bold'); doc.setTextColor(220,38,38);
+  doc.text('DEDUCCIONES', lX, ry); ry += lH;
+  doc.setFont(undefined,'normal');
+  const dedRows = [
+    ['(-) AFP Empleado:', totAfp],
+    ['(-) SFS Empleado:', totSfs],
+    ['(-) ISR:', totIsr],
+    ['(-) Préstamos:', totPrest],
+    ['(-) Otros Descuentos:', totOdesc],
+  ];
+  for (const [lbl, val] of dedRows) {
+    doc.text(lbl, lX, ry);
+    doc.text('RD$ ' + fmtNum(val), vX, ry, { align:'right' });
+    ry += lH;
   }
 
-  // ── Línea separadora ──
-  ry += 1;
+  // Doble línea y Neto
   doc.setDrawColor(26,36,51); doc.setLineWidth(0.5);
-  doc.line(lblX, ry, valX, ry);
+  doc.line(lX, ry-1, vX, ry-1);
   doc.setLineWidth(0.2);
-  ry += 6;
+  doc.line(lX, ry+1, vX, ry+1);
+  ry += lH;
+  doc.setFontSize(9); doc.setFont(undefined,'bold'); doc.setTextColor(22,101,52);
+  doc.text('NETO TOTAL A PAGAR:', lX, ry);
+  doc.text('RD$ ' + fmtNum(totNeto), vX, ry, { align:'right' });
 
-  // ── NETO A PAGAR ──
-  doc.setFontSize(10); doc.setFont(undefined,'bold'); doc.setTextColor(22,101,52);
-  doc.text('NETO TOTAL A PAGAR', lblX, ry);
-  doc.text(`RD$ ${fmtNum(totNeto)}`, valX, ry, { align:'right' });
+  // TSS Patronal fuera del box
+  doc.setFontSize(7.5); doc.setFont(undefined,'normal'); doc.setTextColor(124,58,237);
+  doc.text('TSS Patronal Total (cargo empresa):  RD$ ' + fmtNum(totTss),
+    pageW/2, y + bH + 8, { align:'center' });
 
-  // ── TSS Patronal (fuera del box, debajo) ──
-  const tssY = y + boxH + 6;
-  doc.setFontSize(8); doc.setFont(undefined,'normal'); doc.setTextColor(124,58,237);
-  doc.text(`TSS Patronal Total:  RD$ ${fmtNum(totTss)}`, pageW/2, tssY, { align:'center' });
+  doc.save(filename);
+}
+
+// ── Generador PDF Volantes individuales por empleado ──
+function _generarVolantesPDF(titulo, datosEmp, filename) {
+  if (!datosEmp?.length) { alert('No hay empleados.'); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'portrait', format: 'a4' });
+  const pageW = 210;
+  const mL = 20, mR = 20;
+  const cW = pageW - mL - mR;  // 170mm ancho útil
+  const vX = mL + cW;          // borde derecho para valores
+  const fecha = new Date().toLocaleDateString('es-DO');
+
+  datosEmp.forEach((emp, idx) => {
+    if (idx > 0) doc.addPage();
+
+    let y = 0;
+
+    // ── Encabezado oscuro ──
+    doc.setFillColor(26,36,51);
+    doc.rect(0, 0, pageW, 32, 'F');
+    doc.setTextColor(255,255,255);
+    doc.setFontSize(12); doc.setFont(undefined,'bold');
+    doc.text(currentEmpresa.nombre, pageW/2, 12, { align:'center' });
+    doc.setFontSize(9); doc.setFont(undefined,'normal');
+    doc.text('Volante de Pago — ' + titulo, pageW/2, 20, { align:'center' });
+    doc.setFontSize(8);
+    doc.text('Fecha: ' + fecha, pageW - 8, 28, { align:'right' });
+    y = 36;
+
+    // ── Banda del empleado ──
+    doc.setFillColor(240,247,255);
+    doc.rect(mL-2, y, cW+4, 22, 'F');
+    doc.setDrawColor(191,219,254);
+    doc.rect(mL-2, y, cW+4, 22, 'S');
+    doc.setTextColor(11,79,108); doc.setFontSize(12); doc.setFont(undefined,'bold');
+    doc.text(emp.nombre, pageW/2, y+9, { align:'center' });
+    doc.setFontSize(9); doc.setFont(undefined,'normal'); doc.setTextColor(100,116,139);
+    doc.text(emp.cargo || '', pageW/2, y+17, { align:'center' });
+    y += 28;
+
+    const lH = 9;
+    const lX = mL;
+
+    // ── INGRESOS ──
+    doc.setFillColor(11,79,108);
+    doc.rect(mL-2, y, cW+4, 9, 'F');
+    doc.setTextColor(255,255,255); doc.setFontSize(8.5); doc.setFont(undefined,'bold');
+    doc.text('INGRESOS', pageW/2, y+6, { align:'center' });
+    y += 12;
+
+    doc.setFont(undefined,'normal'); doc.setTextColor(30,41,59); doc.setFontSize(9);
+    const ingRows = [
+      ['Salario Quincena', emp.salario_quincena],
+      ['(+) Horas Extras', emp.monto_horas_extras],
+      ['(+) Días Festivos', emp.monto_dias_fiestas],
+      ['(+) Otros Ingresos / Comisiones', emp.otros_ingresos],
+    ];
+    for (const [lbl, val] of ingRows) {
+      doc.text(lbl + ':', lX, y);
+      doc.text('RD$ ' + fmtNum(val), vX, y, { align:'right' });
+      y += lH;
+    }
+    // Separador
+    doc.setDrawColor(11,79,108); doc.setLineWidth(0.3);
+    doc.line(lX, y, vX, y); y += 3;
+    doc.setFont(undefined,'bold'); doc.setTextColor(11,79,108); doc.setFontSize(9.5);
+    doc.text('Total Devengado:', lX, y);
+    doc.text('RD$ ' + fmtNum(emp.total_devengado), vX, y, { align:'right' });
+    y += lH + 4;
+
+    // ── DEDUCCIONES ──
+    doc.setFillColor(220,38,38);
+    doc.rect(mL-2, y, cW+4, 9, 'F');
+    doc.setTextColor(255,255,255); doc.setFontSize(8.5); doc.setFont(undefined,'bold');
+    doc.text('DEDUCCIONES', pageW/2, y+6, { align:'center' });
+    y += 12;
+
+    doc.setFont(undefined,'normal'); doc.setTextColor(30,41,59); doc.setFontSize(9);
+    const dedRows = [
+      ['(-) AFP Empleado', emp.afp_empleado],
+      ['(-) SFS Empleado', emp.sfs_empleado],
+      ['(-) ISR', emp.isr],
+      ['(-) Préstamos', emp.prestamos],
+      ['(-) Otros Descuentos', emp.otros_descuentos],
+    ];
+    for (const [lbl, val] of dedRows) {
+      doc.setTextColor(180,30,30);
+      doc.text(lbl + ':', lX, y);
+      doc.text('RD$ ' + fmtNum(val), vX, y, { align:'right' });
+      y += lH;
+    }
+    y += 2;
+
+    // ── NETO A PAGAR ──
+    doc.setFillColor(22,101,52);
+    doc.rect(mL-2, y, cW+4, 16, 'F');
+    doc.setTextColor(255,255,255); doc.setFontSize(10); doc.setFont(undefined,'bold');
+    doc.text('NETO A PAGAR:', lX, y+10);
+    doc.text('RD$ ' + fmtNum(emp.neto_pagar), vX, y+10, { align:'right' });
+    y += 24;
+
+    // ── Firmas ──
+    doc.setDrawColor(100,116,139); doc.setLineWidth(0.3);
+    const firmaW = 60;
+    doc.line(mL, y, mL+firmaW, y);
+    doc.line(pageW-mR-firmaW, y, pageW-mR, y);
+    doc.setFontSize(7.5); doc.setFont(undefined,'normal'); doc.setTextColor(100,116,139);
+    doc.text('Firma Empleado', mL + firmaW/2, y+5, { align:'center' });
+    doc.text('Firma Pagador / Sello', pageW-mR-firmaW/2, y+5, { align:'center' });
+  });
 
   doc.save(filename);
 }
