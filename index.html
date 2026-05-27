@@ -5254,6 +5254,7 @@ window.exportarNominaPDF = (mes, anio, quincena) => {
   const titulo = `${quincena===1?'1ra':'2da'} Quincena — ${mesesN[mes-1]} ${anio}`;
   const filas = [];
   let totDev=0, totDed=0, totNeto=0, totTss=0;
+  let totAfp=0, totSfs=0, totIsr=0, totPrest=0, totOdesc=0;
 
   document.querySelectorAll('#tbl-nomina-proceso tbody tr').forEach(tr => {
     const nombre  = tr.querySelector('td:first-child strong')?.textContent || '';
@@ -5266,14 +5267,30 @@ window.exportarNominaPDF = (mes, anio, quincena) => {
     const odesc   = parseFloat(tr.querySelector('[data-nom="odesc"]')?.value||0);
     const baseTSS = document.querySelector('input[name="tss-base"]:checked')?.value || 'devengado';
     const c = calcNominaEmpleado(salario, he, df, oi, prest, odesc, isr, baseTSS);
-    totDev  += c.total_devengado;
-    totDed  += c.total_deducciones;
-    totNeto += c.neto_pagar;
-    totTss  += c.total_tss_patronal;
-    filas.push([nombre, fmtNum(c.salario_quincena), fmtNum(c.total_devengado),
-      fmtNum(c.afp_empleado+c.sfs_empleado+c.isr+prest+odesc), fmtNum(c.neto_pagar), fmtNum(c.total_tss_patronal)]);
+    totDev   += c.total_devengado;
+    totDed   += c.total_deducciones;
+    totNeto  += c.neto_pagar;
+    totTss   += c.total_tss_patronal;
+    totAfp   += c.afp_empleado;
+    totSfs   += c.sfs_empleado;
+    totIsr   += c.isr;
+    totPrest += prest;
+    totOdesc += odesc;
+    filas.push([
+      nombre,
+      fmtNum(c.salario_quincena),
+      fmtNum(c.total_devengado),
+      fmtNum(c.afp_empleado),
+      fmtNum(c.sfs_empleado),
+      fmtNum(c.isr),
+      fmtNum(prest),
+      fmtNum(odesc),
+      fmtNum(c.neto_pagar),
+      fmtNum(c.total_tss_patronal)
+    ]);
   });
-  _generarNominaPDF(titulo, filas, totDev, totDed, totNeto, totTss, `Nomina_Q${quincena}_${mesesN[mes-1]}_${anio}.pdf`);
+  const totales = { totDev, totDed, totNeto, totTss, totAfp, totSfs, totIsr, totPrest, totOdesc };
+  _generarNominaPDF(titulo, filas, totales, `Nomina_Q${quincena}_${mesesN[mes-1]}_${anio}.pdf`);
 };
 
 // ── PDF desde historial ──
@@ -5284,69 +5301,164 @@ window.exportarNominaPDFHistorial = async (nominaId) => {
   const nom = nominasData.find(n=>n.id===nominaId);
   const mesesN = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
   const titulo = `${nom?.quincena===1?'1ra':'2da'} Quincena — ${mesesN[(nom?.mes||1)-1]} ${nom?.anio}`;
-  const filas = data.map(d => [
-    d.nombre_empleado,
-    fmtNum(d.salario_quincena),
-    fmtNum(d.total_devengado),
-    fmtNum(d.total_deducciones),
-    fmtNum(d.neto_pagar),
-    fmtNum(d.total_tss_patronal)
-  ]);
-  _generarNominaPDF(titulo, filas, nom?.total_devengado||0, nom?.total_deducciones||0, nom?.total_neto||0, nom?.total_tss_patronal||0,
+  let totAfp=0, totSfs=0, totIsr=0, totPrest=0, totOdesc=0;
+  const filas = data.map(d => {
+    totAfp   += d.afp_empleado||0;
+    totSfs   += d.sfs_empleado||0;
+    totIsr   += d.isr||0;
+    totPrest += d.prestamos||0;
+    totOdesc += d.otros_descuentos||0;
+    return [
+      d.nombre_empleado,
+      fmtNum(d.salario_quincena),
+      fmtNum(d.total_devengado),
+      fmtNum(d.afp_empleado||0),
+      fmtNum(d.sfs_empleado||0),
+      fmtNum(d.isr||0),
+      fmtNum(d.prestamos||0),
+      fmtNum(d.otros_descuentos||0),
+      fmtNum(d.neto_pagar),
+      fmtNum(d.total_tss_patronal)
+    ];
+  });
+  const totales = {
+    totDev: nom?.total_devengado||0, totDed: nom?.total_deducciones||0,
+    totNeto: nom?.total_neto||0,     totTss: nom?.total_tss_patronal||0,
+    totAfp, totSfs, totIsr, totPrest, totOdesc
+  };
+  _generarNominaPDF(titulo, filas, totales,
     `Nomina_Q${nom?.quincena}_${mesesN[(nom?.mes||1)-1]}_${nom?.anio}.pdf`);
 };
 
 // ── Generador PDF común ──
-function _generarNominaPDF(titulo, filas, totDev, totDed, totNeto, totTss, filename) {
+function _generarNominaPDF(titulo, filas, totales, filename) {
+  const { totDev, totDed, totNeto, totTss, totAfp, totSfs, totIsr, totPrest, totOdesc } = totales;
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: 'landscape', format: 'a4' });
+  const pageW = 297;
+  const marginL = 10, marginR = 10;
 
-  // Encabezado
+  // ── Encabezado ──
   doc.setFillColor(26, 36, 51);
-  doc.rect(0, 0, 297, 22, 'F');
+  doc.rect(0, 0, pageW, 24, 'F');
   doc.setTextColor(255,255,255);
-  doc.setFontSize(14); doc.setFont(undefined,'bold');
-  doc.text(currentEmpresa.nombre, 14, 10);
-  doc.setFontSize(10); doc.setFont(undefined,'normal');
-  doc.text(`Nómina — ${titulo}`, 14, 17);
-  doc.text(`Fecha: ${new Date().toLocaleDateString('es-DO')}`, 220, 17);
+  doc.setFontSize(13); doc.setFont(undefined,'bold');
+  doc.text(currentEmpresa.nombre, pageW/2, 10, { align:'center' });
+  doc.setFontSize(9); doc.setFont(undefined,'normal');
+  doc.text(`Nómina — ${titulo}`, pageW/2, 17, { align:'center' });
+  doc.setFontSize(8);
+  doc.text(`Fecha: ${new Date().toLocaleDateString('es-DO')}`, pageW - marginR, 20, { align:'right' });
 
-  // Tabla principal
+  // ── Tabla principal: columnas individuales de deducciones ──
   doc.autoTable({
-    startY: 26,
-    head: [['Empleado','Salario Quinc.','Total Devengado','Deducciones','NETO A PAGAR','TSS Patronal']],
+    startY: 28,
+    head: [[
+      'Empleado',
+      'Sal. Quinc.',
+      'Total Dev.',
+      'AFP Emp.',
+      'SFS Emp.',
+      'ISR',
+      'Préstamos',
+      'Otros Desc.',
+      'NETO A PAGAR',
+      'TSS Patronal'
+    ]],
     body: filas,
-    foot: [['TOTALES', '', fmtNum(totDev), fmtNum(totDed), fmtNum(totNeto), fmtNum(totTss)]],
-    headStyles: { fillColor: [11,79,108], textColor:255, fontStyle:'bold', fontSize:9 },
-    footStyles: { fillColor: [26,36,51], textColor:255, fontStyle:'bold', fontSize:9 },
-    bodyStyles: { fontSize: 9 },
+    foot: [[
+      'TOTALES',
+      '',
+      fmtNum(totDev),
+      fmtNum(totAfp),
+      fmtNum(totSfs),
+      fmtNum(totIsr),
+      fmtNum(totPrest),
+      fmtNum(totOdesc),
+      fmtNum(totNeto),
+      fmtNum(totTss)
+    ]],
+    headStyles: {
+      fillColor: [11,79,108], textColor:255, fontStyle:'bold',
+      fontSize:8, halign:'center', valign:'middle'
+    },
+    footStyles: {
+      fillColor: [26,36,51], textColor:255, fontStyle:'bold',
+      fontSize:8, halign:'center'
+    },
+    bodyStyles: { fontSize: 8, halign:'center', valign:'middle' },
     columnStyles: {
-      0: { cellWidth: 60 },
-      1: { halign:'right' }, 2: { halign:'right' },
-      3: { halign:'right', textColor:[220,38,38] },
-      4: { halign:'right', fontStyle:'bold', textColor:[22,101,52] },
-      5: { halign:'right', textColor:[124,58,237] }
+      0: { halign:'left',  cellWidth:48 },
+      1: { halign:'right', cellWidth:24 },
+      2: { halign:'right', cellWidth:24 },
+      3: { halign:'right', cellWidth:22, textColor:[220,38,38] },
+      4: { halign:'right', cellWidth:22, textColor:[220,38,38] },
+      5: { halign:'right', cellWidth:20, textColor:[220,38,38] },
+      6: { halign:'right', cellWidth:22, textColor:[220,38,38] },
+      7: { halign:'right', cellWidth:22, textColor:[220,38,38] },
+      8: { halign:'right', cellWidth:26, fontStyle:'bold', textColor:[22,101,52] },
+      9: { halign:'right', cellWidth:22, textColor:[124,58,237] }
     },
     alternateRowStyles: { fillColor: [248,250,252] },
-    margin: { left:14, right:14 }
+    margin: { left:marginL, right:marginR }
   });
 
-  // Resumen TSS
-  const y = doc.lastAutoTable.finalY + 10;
+  // ── Resumen vertical: Devengado - Conceptos = Neto ──
+  const y = doc.lastAutoTable.finalY + 8;
+  const boxW = 130;
+  const boxX = (pageW - boxW) / 2;   // centrado en la página
+  const lineH = 8;
+  const lblX  = boxX + 4;
+  const valX  = boxX + boxW - 4;
+  let   ry    = y + 8;
+
+  // Calcular altura del box dinámicamente
+  const boxH = 8 + (lineH * 8) + 6 + 10;  // padding + 8 filas + línea + neto
+
   doc.setFillColor(248,250,252);
-  doc.rect(14, y, 269, 28, 'F');
-  doc.setDrawColor(226,232,240);
-  doc.rect(14, y, 269, 28, 'S');
-  doc.setTextColor(30,41,59); doc.setFontSize(9); doc.setFont(undefined,'bold');
-  doc.text('RESUMEN TSS', 18, y+7);
-  doc.setFont(undefined,'normal');
-  doc.text(`Total Devengado:  RD$ ${fmtNum(totDev)}`, 18, y+14);
-  doc.text(`Total Deducciones: RD$ ${fmtNum(totDed)}`, 18, y+20);
-  doc.setFont(undefined,'bold');
-  doc.setTextColor(22,101,52);
-  doc.text(`NETO TOTAL A PAGAR: RD$ ${fmtNum(totNeto)}`, 100, y+14);
-  doc.setTextColor(124,58,237);
-  doc.text(`TSS PATRONAL TOTAL: RD$ ${fmtNum(totTss)}`, 100, y+20);
+  doc.rect(boxX, y, boxW, boxH, 'F');
+  doc.setDrawColor(203,213,225);
+  doc.rect(boxX, y, boxW, boxH, 'S');
+
+  // ── Total Devengado (positivo) ──
+  doc.setFontSize(9); doc.setFont(undefined,'bold'); doc.setTextColor(30,41,59);
+  doc.text('Total Devengado', lblX, ry);
+  doc.text(`RD$ ${fmtNum(totDev)}`, valX, ry, { align:'right' });
+  ry += 3;
+  doc.setDrawColor(203,213,225);
+  doc.line(lblX, ry, valX, ry);
+  ry += lineH - 2;
+
+  // ── Deducciones individuales ──
+  const conceptos = [
+    ['(-) AFP Empleado',     totAfp  ],
+    ['(-) SFS Empleado',     totSfs  ],
+    ['(-) ISR',              totIsr  ],
+    ['(-) Préstamos',        totPrest],
+    ['(-) Otros Descuentos', totOdesc],
+  ];
+  doc.setFontSize(8); doc.setFont(undefined,'normal'); doc.setTextColor(220,38,38);
+  for (const [lbl, val] of conceptos) {
+    doc.text(lbl,                   lblX, ry);
+    doc.text(`RD$ ${fmtNum(val)}`,  valX, ry, { align:'right' });
+    ry += lineH;
+  }
+
+  // ── Línea separadora ──
+  ry += 1;
+  doc.setDrawColor(26,36,51); doc.setLineWidth(0.5);
+  doc.line(lblX, ry, valX, ry);
+  doc.setLineWidth(0.2);
+  ry += 6;
+
+  // ── NETO A PAGAR ──
+  doc.setFontSize(10); doc.setFont(undefined,'bold'); doc.setTextColor(22,101,52);
+  doc.text('NETO TOTAL A PAGAR', lblX, ry);
+  doc.text(`RD$ ${fmtNum(totNeto)}`, valX, ry, { align:'right' });
+
+  // ── TSS Patronal (fuera del box, debajo) ──
+  const tssY = y + boxH + 6;
+  doc.setFontSize(8); doc.setFont(undefined,'normal'); doc.setTextColor(124,58,237);
+  doc.text(`TSS Patronal Total:  RD$ ${fmtNum(totTss)}`, pageW/2, tssY, { align:'center' });
 
   doc.save(filename);
 }
