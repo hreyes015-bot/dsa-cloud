@@ -701,15 +701,32 @@ async function crearEmpresa(e) {
     created_by: session.user.id
   };
 
-  const { data, error } = await supa.from('empresas').insert(datos).select().single();
-
-  if (error) {
-    alert('Error al crear empresa: ' + error.message);
+  // 1. Insertar empresa sin select (evita bloqueo RLS)
+  const { error: errIns } = await supa.from('empresas').insert(datos);
+  if (errIns) {
+    alert('Error al crear empresa: ' + errIns.message);
     btn.disabled = false; btn.textContent = 'Crear Empresa';
     return;
   }
 
-  // Sembrar el plan de cuentas básico
+  // 2. Obtener la empresa recién creada por RNC o nombre
+  const { data, error: errGet } = await supa.from('empresas')
+    .select().eq('created_by', session.user.id).eq('nombre', datos.nombre)
+    .order('created_at', { ascending: false }).limit(1).single();
+  if (errGet || !data) {
+    alert('Empresa creada pero no se pudo cargar. Recarga la página.');
+    btn.disabled = false; btn.textContent = 'Crear Empresa';
+    return;
+  }
+
+  // 3. Crear membership del usuario como owner
+  await supa.from('memberships').insert({
+    user_id: session.user.id,
+    empresa_id: data.id,
+    rol: 'owner'
+  });
+
+  // 4. Sembrar el plan de cuentas básico
   await supa.rpc('sembrar_plan_cuentas_default', { emp_id: data.id });
 
   closeModal();
@@ -5875,25 +5892,4 @@ window.importarRespaldoCloud = async () => {
     await insertBatch('facturas',data.facturas); await insertBatch('compras',data.compras);
     await insertBatch('asientos',data.asientos);
     alert('✅ Datos restaurados correctamente.');
-  } catch(err) { alert('Error al importar: ' + err.message); }
-};
-
-// ---------- INICIALIZACIÓN ----------
-async function init() {
-  try {
-    const { data, error } = await supa.auth.getSession();
-    if (error) { showMessage('Error de conexión: ' + error.message, 'error'); showAuthScreen(); return; }
-    if (data.session) { session = data.session; showEmpresaScreen(); } else { showAuthScreen(); }
-  } catch(e) { showAuthScreen(); }
-}
-
-supa.auth.onAuthStateChange((event, newSession) => {
-  if (event === 'SIGNED_OUT') { session = null; currentEmpresa = null; showAuthScreen(); }
-  else if (event === 'SIGNED_IN' && newSession) { session = newSession;
-  }
-});
-
-init();
-</script>
-</body>
-</html>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
+  } catch(err) { alert('Error al importar: ' + e
