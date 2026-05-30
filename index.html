@@ -5892,9 +5892,51 @@ window.importarRespaldoCloud = async () => {
     await insertBatch('facturas',data.facturas); await insertBatch('compras',data.compras);
     await insertBatch('asientos',data.asientos);
     alert('✅ Datos restaurados correctamente.');
-  } catch(err) { alert('Error al importar: ' + err.message);
-  }
+  } catch(err) { alert('Error al importar: ' + err.message); }
 };
+
+// ---------- INICIALIZACIÓN ----------
+(async () => {
+  try {
+    const { data: { session: s } } = await supa.auth.getSession();
+    if (s) {
+      session = s;
+      showEmpresaScreen();
+    } else {
+      showAuthScreen();
+    }
+  } catch(e) {
+    console.error('Error inicializando sesión:', e);
+    showAuthScreen();
+  }
+})();
+
+// Centinela de integridad — SIEMPRE debe ser la última línea del script
+window.__DSA_LOADED = true;
+</script>
+
+<script>
+// ── GUARDIA DE INTEGRIDAD ──
+// Si __DSA_LOADED no existe, el script principal se cortó y el sistema no funciona
+if (!window.__DSA_LOADED) {
+  document.body.innerHTML = [
+    '<div style="display:flex;align-items:center;justify-content:center;height:100vh;',
+    'font-family:sans-serif;background:#f8f9fa;">',
+    '<div style="max-width:520px;padding:40px;background:white;border-radius:12px;',
+    'box-shadow:0 4px 24px rgba(0,0,0,0.12);text-align:center;">',
+    '<div style="font-size:48px;margin-bottom:16px;">⚠️</div>',
+    '<h2 style="color:#d7263d;margin:0 0 12px;">Error de carga del sistema</h2>',
+    '<p style="color:#555;line-height:1.6;margin-bottom:20px;">',
+    'El sistema no se cargó correctamente. Esto puede deberse a una conexión inestable.',
+    '</p>',
+    '<button onclick="location.reload(true)" style="background:#1a2433;color:white;',
+    'border:none;padding:12px 28px;border-radius:8px;font-size:16px;cursor:pointer;">',
+    '🔄 Recargar Sistema</button>',
+    '<p style="margin-top:16px;font-size:12px;color:#999;">',
+    'Si el problema persiste, presiona Ctrl+Shift+R</p>',
+    '</div></div>'
+  ].join('');
+}
 </script>
 </body>
 </html>
