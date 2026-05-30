@@ -722,8 +722,10 @@ async function crearEmpresa(e) {
   // 3. Crear membership del usuario como owner
   await supa.from('memberships').insert({
     user_id: session.user.id,
+    user_email: session.user.email,
     empresa_id: data.id,
-    rol: 'owner'
+    rol: 'owner',
+    estado: 'activo'
   });
 
   // 4. Sembrar el plan de cuentas básico
@@ -5934,9 +5936,4 @@ if (!window.__DSA_LOADED) {
     '🔄 Recargar Sistema</button>',
     '<p style="margin-top:16px;font-size:12px;color:#999;">',
     'Si el problema persiste, presiona Ctrl+Shift+R</p>',
-    '</div></div>'
-  ].join('');
-}
-</script>
-</body>
-</html>
+  
