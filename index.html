@@ -5892,4 +5892,9 @@ window.importarRespaldoCloud = async () => {
     await insertBatch('facturas',data.facturas); await insertBatch('compras',data.compras);
     await insertBatch('asientos',data.asientos);
     alert('✅ Datos restaurados correctamente.');
-  } catch(err) { alert('Error al importar: ' + e
+  } catch(err) { alert('Error al importar: ' + err.message);
+  }
+};
+</script>
+</body>
+</html>
